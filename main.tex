@@ -1,0 +1,369 @@
+% % % % % % % %  MDT UFSM 2015  % % % % % % % % 
+%% Arquivo base para o documento - ver. 1.08 %%
+% % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+% % % OPCOES DE COMPILACAO
+% % % PAGINACAO
+% % % PAGINACAO SIMPLES (FRENTE): PARA TRABALHOS COM MENOS DE 100 PAGINAS
+\documentclass[oneside,openright,12pt]{ufsm_2015} %%%%% OPCAO PADRAO -> PAGINACAO SIMPLES. PARA TRABALHOS COM MAIS DE 100 PAGINAS COMENTE ESTA LINHA E DESCOMENTE A LINHA 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% PAGINACAO DUPLA (FRENTE E VERSO): PARA TRABALHOS COM MAIS DE 100 PAGINAS
+% \documentclass[twoside,openright,12pt]{ufsm_2015}  %%%% PARA TRABALHOS COM MAIS DE 100 PAGINAS DESCOMENTE AQUI
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+
+
+% % % %  CODIFICACAO DO TEXTO 
+% % % %  POR PADRAO USA-SE UTF8. PARA APLICAR A CODIFICACAO OESTE EUROPEU (ISO 8859-1) DESCOMENTE A LINHA ABAIXO. ELA ATIVA A OPCAO "latin1" DO PACOTE "inputenc"
+% \oesteeuropeu
+% % % % % % % % % % % 
+
+% % % % % % % % PACOTES PESSOAIS % % % % % % % %  
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usetikzlibrary{shapes,arrows}
+% Configurando layout para mostrar codigos C++
+\usepackage{listings}
+% \lstset{
+%   language=python,
+%   basicstyle=\ttfamily\scriptsize, 
+%   keywordstyle=\color{blue}, 
+%   stringstyle=\color{red}, 
+%   commentstyle=\color{gray}, 
+%   extendedchars=true, 
+%   showspaces=false, 
+%   showstringspaces=false, 
+%   numbers=left,
+%   breaklines=true, 
+%   breakautoindent=true,
+%   inputencoding=utf8,
+% }
+\definecolor{mGreen}{rgb}{0,0.6,0}
+\definecolor{mGray}{rgb}{0.5,0.5,0.5}
+\definecolor{mPurple}{rgb}{0.58,0,0.82}
+\lstset{
+  commentstyle=\color{mGreen},
+  keywordstyle=\color{magenta},
+  numberstyle=\tiny\color{mGray},
+  stringstyle=\color{mPurple},
+  basicstyle=\footnotesize,
+  breakatwhitespace=false,         
+  breaklines=true,                 
+  captionpos=b,                    
+  keepspaces=true,                 
+  numbers=left,                    
+  showspaces=false,                
+  showstringspaces=false,
+  showtabs=false,                  
+  tabsize=2,
+  language=C
+}                                  
+\usepackage{color}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{pgfgantt}
+\usepackage{pgfcalendar}
+\usepackage{tablefootnote}
+\usepackage{pifont}
+\usepackage{xcolor}
+\newcommand*\Let[2]{\State #1 $\gets$ #2}
+\newcommand{\xmark}{\ding{55}}
+\newcommand{\cmark}{\ding{51}}
+
+
+% % % % % % % % DEFINICOES PESSOAIS % % % % % % % %
+\newcommand{\ignore}[2]{\hspace{0in}#2}
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % DADOS DO TRABALHO % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+% % % % % % % % % % INFORMACOES INSTITUCIONAIS % % % % % % % % % % 
+
+
+% % CENTRO DE ENSINO DA UFSM
+\centroensino{Centro de Tecnologia}  %%% NOME POR EXTENSO
+\centroensinosigla{CT}  %%% SIGLA
+
+% % CURSO DA UFSM
+\nivelensino{Pós-Graduação}  %%%%%%% NIVEL DE ENSINO 
+\curso{Ciência da Computação}   %%%%% NOME POR EXTENSO
+%\ppg{PPGALGO}   %%%%%% SIGLA
+\statuscurso{Programa}  %%%% STATUS= {Programa} ou {Curso}
+% \EAD  %%%% para cursos EAD
+% % % %  LOCAL DO CAMPUS OU POLO
+\cidade{Santa Maria}
+\estado{RS}
+
+% % % % % % % % % % INFORMACOES DO AUTOR % % % % % % % % % % 
+\author{Maurício Matter Donato}   %%%%% AUTOR DO TRABALHO
+\sexo{M} %%%% SEXO DO AUTOR -> M=masculino   F=feminino (IMPORTANTE PARA AJUSTAR PAGINAS PRE-TEXTUAIS)
+\grauensino{Mestrado}    %%%%%%%% GRAU DE ENSINO A SER CONCLUIDO
+\grauobtido{Mestre}    %%%%% TITULO OBTIDO
+\email{mdonato@inf.ufsm.br}   %%%% E-MAIL PARA CATALOGRAFICA (COPYRIGHT) - OBRIGATORIO
+%\endereco{Rua das abobrinhas, n. 666} %%%% TELEFONE PARA CATALOGRAFICA (COPYRIGHT) (CAMPO OPICIONAL -- CASO NAO POSSUA OU NAO QUEIRA DIVULGAR COMENTE A LINHA)
+%\fone{11 2222 3333}   %%%% TELEFONE PARA CATALOGRAFICA (COPYRIGHT) FORMATO {11 2222 3333} (CAMPO OPICIONAL -- CASO NAO POSSUA OU NAO QUEIRA DIVULGAR COMENTE A LINHA)
+%\fax{11 2222 3333}   %%%% FAX PARA CATALOGRAFICA (COPYRIGHT) FORMATO {11 2222 3333} (CAMPO OPICIONAL -- CASO NAO POSSUA OU NAO QUEIRA DIVULGAR COMENTE A LINHA)
+
+
+% % % % % % % % % % INFORMACOES DA BANCA % % % % % % % % % % 
+% OBSERVACOES: O CAMPO ORIENTADOR EH OBRIGATORIO E NAO DEVE SER COMENTADO
+% % % % % %    OS DEMAIS MEMBROS DA BANCA (COOREIENTADOR E DEMAIS PROFESSORES) QUANDO COMENTADOS NAO APARECEM NA FOLHA DE APROVACAO (O LAYOUT DA FOLHA DE APROVACAO ESTA PREPARADO PARA O ORIENTADOR E ATE MAIS 4 MEMBROS NA BANCA
+\orientador{Patrícia Pitthan de Araujo Barcelos}{Dra}{UFSM}{F}{P}  %%%INFORMACOES SOBRE ORIENTADOR: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}{SEXO} M=masculino   F=feminino {PARTE DA BANCA?} P=presidente  M=Membro  N=Nao faz parte
+%\coorientador{Co-orientadora placeholder}{Dra}{UFSM}{F}{M} %%%INFORMACOES SOBRE CO-ORIENTADOR: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}{SEXO} M=masculino   F=feminino {PARTE DA BANCA?} P=presidente  M=Membro  N=Nao faz parte
+\bancaum{Indefinido}{Dra}{UFSM}{F}{M}  %%%INFORMACOES SOBRE PRIMEIRO NOME DA BANCA: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}{SEXO} M=masculino   F=feminino {PARTE DA BANCA?} P=presidente  M=Membro  N=Nao faz parte
+\bancadois{Indefinido}{Dr}{UFSM}  %%%INFORMACOES SOBRE SEGUNDO NOME DA BANCA: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}
+%\bancatres{Banca Três}{Dra}{UFSM} %%%INFORMACOES SOBRE TERCEIRO NOME DA BANCA: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}
+% \bancaquatro{Banca Quatro}{Dr}{DDDD} %%%INFORMACOES SOBRE QUARTO NOME DA BANCA: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}
+% \bancacinco{Banca Cinco}{Dra}{EEEE} %%%INFORMACOES SOBRE QUARTO NOME DA BANCA: OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}
+% \supervisor{Al Paccino}{Dr}{MAFIA}{M}{N} %%%INFORMACOES SOBRE SUPERVISOR (indicado para estagios): OS CAMPOS SAO:{NOME}{SIGLA DA TITULACAO}{SIGLA DA INSTITUICAO DE ORIGEM}{SEXO} M=masculino   F=feminino {PARTE DA BANCA?} P=Presidente  M=Membro  N=Nao faz parte
+
+
+
+% % % % % % % % % % REALIZACAO POR VIDEO CONFERENCIA (MEMORANDO 04/2016 BIBLIOTECA CENTRAL UFSM)
+\videoconferencia % % % % QUANDO O ACADEMICO DEFENDE POR VIDEO CONFERENCIA (PERMITIDO PELO ARTIGO 82 DO REGIMENTO GERAL DA PRPGP/UFSM). PARA DEFESAS NAS QUAIS O ACADEMICO ESTA PRESENTE COMENTE ESTA LINHA
+% % % % QUANDO UM DOS MEMBROS DA BANCA PARTICIPA POR VIDEO CONFERENCIA INDICAR O MEMBRO DE ACORDO COM A LISTA ABAIXO. CASO CONTRARIO MANTER A PALAVRA "NAO". SAO PERMITIDOS, PELO REGIMENTO PRGPGP (ARTIGO 83) ATE 2 MEMBROS 
+\videoconferenciabancap{NAO}  %%%% PRIMEIRO MEMBRO
+\videoconferenciabancas{NAO}  %%%%% SEGUNDO MEMBRO
+% % O > ORIENTADOR
+% % CO > COORIENTADOR% % % % QUANDO UM DOS MEMBROS DA BANCA PARTICIPA POR VIDEO CONFERENCIA INDICAR O MEMBRO DE ACORDO COM A LISTA ABAIXO. CASO CONTRARIO MANTER A PALAVRA "NAO". SAO PERMITIDOS, PELO REGIMENTO PRGPGP ATE 2 MEMBROS.
+% % 1 > BANCA UM
+% % 2 > BANCA DOIS
+% % 3 > BANCA TRÊS
+% % 4 > BANCA QUATRO
+% % 5 > BANCA CINCO
+% % S > SUPERVISOR
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+% % % % % % % % % % INFORMACOES SOBRE O TRABALHO % % % % % % % % % %
+% % % %  TITULO DO TRABALHO
+\titulo{Arquitetura Dinâmica para o Gerenciamento de Memória em Aplicações com Reuso de Dados no Apache Spark} %% NAO EH NECESSARIO CAPITALIZAR
+% % % %  TITULO DO TRABALHO EM INGLES
+\englishtitle{Dynamic Architecture for Memory Management on Applications With Data Reuse on Apache Spark}  %% NAO EH NECESSARIO CAPITALIZAR
+% % % AREA DE CONCENTRACAO DO TRABALHO (CNPQ)
+\areaconcentracao{Ciência da Computação}
+% % % TIPO DE TRABALHO - MANTER APENAS UMA LINHA DESCOMENTADA
+% \tcc  %% Tese de <nivel de ensino>
+% \qualificacao %% Exame de Qualificação de <nivel de ensino>
+\dissertacao %% Dissertacao de <nivel de ensino>
+% \monografia %% Monografia
+% \monografiag  %% Monografia (nao exibe area de concentracao)
+% \tf  %% Trabalho Final de <nivel de ensino>
+% \tfg  %% Trabalho Final de Graduacao (nao exibe area de concentracao)
+% \tcc  %% Trabalho de Conclusao de Curso
+% \tccg  %% Trabalho de Conclusao de Curso (nao exibe area de concentracao)
+% \relatorio  %% Relatório de Estágio (nao exibe area de concentracao)
+% \generico   %%% Alternativa para aqueles cursos que nao recebem o titulo de bacharel ou licenciado. Ex: engenharia, arquitetura, etc... Os campos abaixo tambem devem ser preenchidos
+%     \tipogenerico{Tipo de trabalho em português}
+%     \tipogenericoen{Tipo de trabalho em inglês}
+%     \concordagenerico{o}
+%     \graugenerico{Engenheiro Eletricista}
+% % % DATA DA DEFESA 
+\data{31}{12}{2019} %% FORMATO {DD}{MM}{AAAA}
+
+
+% % % % %  ALGUMAS ENTRADAS PRE-TEXTUAIS
+% % % % CASO NAO QUEIRA UTILIZA-LAS COMENTE A LINHA DE COMANDO
+% % % EPIGRAFE
+\epigrafe{}{} %ESTRUTURA DE CAMPOS -> {Texto}{Autor}
+% % % DEDICATORIA
+\dedicatoria{
+  % Dedico esse trabalho exclusivamente aos meus pais, Raul e Santa, que mesmo possuindo origem simples e humilde deram o melhor de si para que seus filhos conseguissem correrem atrás dos seus sonhos, nesse país que, apesar de belo por natureza, sofre com injustiças sociais. Sem seu apoio, o trajeto até aqui teria sido exponencialmente mais difícil.
+}
+% % % %  AGRADECIMENTOS
+\agradecimentos{
+% Agradeço primeiramente aos meus pais e irmãos, pelo amor, atenção e apoio incondicional que prestaram durante a pós-graduação e também durante toda a minha vida.
+
+% Agradeço ao meu professor orientador, João, e à banca, que contribuíram de forma insubstituível para a minha formação e a de meus colegas, com abordagens e maneiras de promoção à busca pelo conhecimento variadas, mas em sua grande maioria eficazes.
+
+% Agradeço ao companheirismo e a força passada pelos meus amigos e colegas de Laboratório, com os quais convivi durante estes dois anos no Laboratório de Sistemas de Computação. Agradecimentos especiais aos mais próximos: Ana, Iago, Lucas e Maurício .
+
+% Agradeço aos meus amigos fora do programa. Agradecimentos especiais aos mais próximos: Cassiano, Felipe, Igor, João, Joel, Linda, Márian, Otávio, Pedro, Raul e Vinícius.
+
+% Agradeço à Universidade Federal de Santa Maria, pelo ambiente de ensino de excelência, amigável e acolhedor que proporciona aos seus alunos e que proporcionou a mim durante esses dois anos de programa.
+
+% Ofereço agradecimentos também ao programa NVIDIA Hardware Grant Program que cedeu a plataforma embarcada utilizada nos testes realizados neste trabalho.
+}
+
+% % % % %  RESUMO E PALAVRAS CHAVE DO RESUMO - OBRIGATORIO PARA MDT-UFSM
+\resumo{
+% \singlespacing
+
+}
+\palavrachave{}
+% "... deverão constar, no mínimo, três palavras-chave, iniciadas em
+% letras maiúsculas, cada termo separado dos demais por ponto, e
+% finalizadas também por ponto." MDT 2012
+
+% % % % %  ABSTRACT E PALAVRAS CHAVE DO RESUMO - OBRIGATORIO PARA MDT-UFSM
+\abstract{
+}
+\keywords{}
+
+
+% % %  ATIVACAO DE LISTAS E PAGINAS ESPECIAIS
+% % %  PARA QUE APARECAO NAO NO TEXTO DESCOMENTE A LINHA ABAIXO -> POR PADRAO TODAS ESTAO ATIVIDADAS
+
+% % LISTA DE FIGURAS 
+%\semfiguras   %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% % LISTA DE GRAFICOS 
+%\semgraficos   %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% % LISTA DE ILUSTRACOES 
+%\semilustracoes  %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% % LISTA DE TABELAS 
+%\semtabelas   %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% % LISTA DE QUADROS 
+\semquadros   %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% % LISTA DE APENDICES 
+\semapendices  %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+% LISTA DE ANEXOS 
+\semanexos   %%(QUANDO ATIVIDA NAO EXIBE A LISTA)
+
+
+
+% % % %  LISTA DE ABREVIATURAS E SIGLAS
+%%%%%%%% OBS: O espaco entre colchetes \item[] e um ambiente matematico
+%%%%%%%% para não utilizar comente as linhas abaixo.
+\siglamax{SIGLAMAX} %%%% coloque aqui a maior sigla (indentacao)
+\listadeabreviaturasesiglas{
+  \item[x]      x
+}
+
+% % % %  LISTA DE SIMBOLOS
+%%%%%%%% OBS: O espaco entre colchetes \item[] e um ambiente matematico
+%%%%%%%% para não utilizar comente as linhas abaixo.
+%\simbolomax{(Re)2} %%%% coloque aqui o maior simbolo (indentacao)
+%\listadesimbolos{
+%\item[u_*]	Escala de velocidade de fricção	
+%\item[w_*]	Escala de velocidade convectiva
+%\item[(Re)^2]	Maior simbolo da lista
+%}
+
+
+% % FICHA CATALOGRAFICA
+\semcatalografica  %%%%  (QUANDO ATIVIDA NAO EXIBE A FICHA CATALOGRAFICA NECESSITA DO ARQUIVO DA FICHA: ficha_catalografica.pdf
+% % % A FICHA CATALOGRAFICA FORNECIDA PELA UFSM EH UM PDF DO TAMANHO A4
+% % % EH POSSIVEL GERA-LA NO SITE http://cascavel.ufsm.br/ficha_catalografica/
+% % % OS COMANDOS ABAIXO DEFINEM AS MARGENS PARA CORTAR A FICHA FORNECIDA E COLOCA-LA COMO UMA FIGURA NO DOCUMENTO LATEX
+\margemesquerda{4}   %%%% CORTE DE MARGEM ESQUERDA EM CM
+\margemdireita{1.5}   %%%% CORTE DE MARGEM DIREITA EM CM
+\margemsuperior{17}  %%%% CORTE DE MARGEM SUPERIOR EM CM
+\margeminferior{3} %%%% CORTE DE MARGEM INFERIOR EM CM
+% % %  DICA: IMPRIMA UMA COPIA DA FICHA CATALOGRAFICA E FACA A MEDIDA DAS MARGENS!
+
+
+
+
+
+% % FOLHA DE ERRADA (versao rudimentar...pode ser aprimorado)
+% % para não utilizar comente as linhas abaixo.
+% % deve ser preenchida como um ambiente tabular de quatro colunas:
+% % pagina & linha & onde se le & leia-a se \\
+%\errata{
+%10   &    10    & errado   & certo \\
+%\hline
+%12    &    5     & errado com um texto mais longo & certo agora com um texto mais longo\\
+%\hline
+%13   &    3    & $x^2$   & $2x$\\
+%}
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % %  OPCOES DE FORMATACAO % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % CAPITULO: por padrao alinhado a esquerda. Para ativar alinhamento centralizado descomente o comando abaixo
+
+%\centralizado  %%%% <<< centraliza todos os capitulos
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+% % % FONTES: descomente uma das opcoes. caso nenhuma seja ativada a clase usara a fonte padrao do latex
+
+%% helvetica
+\usepackage[scaled]{helvet}
+\renewcommand*\familydefault{\sfdefault}
+
+%% arial
+% \renewcommand{\rmdefault}{phv} % Arial
+% \renewcommand{\sfdefault}{phv} % Arial
+
+%%times
+% \usepackage{mathptmx}
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % %  INICIO DO DOCUMENTO  % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %
+
+
+\begin{document}
+
+
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+\pretextual %%%% GERA AS PAGINAS PRE-TEXTUAIS
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % CORPO DO TRABALHO - INCLUA OS SEUS TEXTOS AQUI
+% % % % % SUGESTAO -> UTILIZE ARQUIVOS EXTERNOS A PARTIR DO COMANDO \input
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % INICIO DAS PAGINAS TEXTUAIS % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+\include{capitulos/introducao}
+	
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % FIM DAS PAGINAS TEXTUAIS % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+
+
+
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+% % % % % % % % % % % % % BIBLIOGRAFIA  % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+
+\bibliografia{referencias}  %%%%% BIBLIOGRAFIA -> INCLUIR NAS CHAVES O NOME DO ARQUIVO *.BIB	
+	
+	
+	
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+% % % % % % % % % % % % % APENDICES % % % % % % % % % % % % % % % % % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+% 	\apendice %%%% TEXTOS A PARIR DESTE PONTO SERAO CONSIDERADOS APENDICES
+
+% \chapter{Demonstração de algo}
+%         \par Algo como apêndice.  
+%          \lipsum[2-10]
+
+          
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+% % % % % % % % % % % % % % % ANEXOS  % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 	
+\anexo    %%%% TEXTOS A PARIR DESTE PONTO SERAO CONSIDERADOS ANEXOS
+        
+% \chapter{Script de execução da biblioteca Caffe}
+% \label{scr:caffe}
+% \lstinputlisting{run_caffe.py}
+
+% \chapter{Script de execução da biblioteca TensorFlow}
+% \label{scr:tf}
+% \lstinputlisting{run_tensorflow.py}
+
+% \chapter{Script para geração de arquivos .csv}
+% \label{scr:loss}
+% \lstinputlisting{generate_csv.py}
+
+\end{document}
