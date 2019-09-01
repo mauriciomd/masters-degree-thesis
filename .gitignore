@@ -12,3 +12,6 @@
 *.ttt
 *.fff
 *.fdb_latexmk
+.vscode/
+__latexindent_temp.tex
+compile.sh
