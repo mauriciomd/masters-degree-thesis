@@ -1,0 +1,260 @@
+\documentclass[diss]{mdtufsm}
+%\documentclass[diss, twoside, openright]{mdtufsm} %- IMPRESSÃO (+ 100 PÁGINAS)
+
+\usepackage[justification=justified]{caption}
+\captionsetup{
+	justification=raggedright,
+	figurewithout,labelsep=endash,
+	singlelinecheck=false
+	}
+
+\usepackage{minted}
+\usepackage{chngcntr}
+\counterwithout{figure}{chapter}
+\counterwithout{table}{chapter}
+\usepackage{ragged2e}
+\usepackage{colortbl}
+\usepackage{times}
+\usepackage{setspace}
+\usepackage{array,multirow}
+\usepackage{float} 
+\usepackage[portuguese,titlenumbered,ruled,linesnumbered]{algorithm2e}
+\usepackage[T1]{fontenc}
+\usepackage{fix-cm}
+\usepackage{times, color, xcolor}
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{amsmath,latexsym,amssymb}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%% EDITAR %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\usepackage[%hidelinks%, 
+            bookmarksopen=true,linktocpage,colorlinks=true,
+            linkcolor=black,citecolor=black,filecolor=magenta,urlcolor=blue,
+            pdftitle={Gerenciamento Dinâmico de Memória em Aplicações com Reuso de Dados no Apache Spark},
+            pdfsubject={Dissertação de Mestrado},
+            pdfkeywords={Memória, LRU, Dinâmico, Apache, Spark,}
+            ]{hyperref} 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\usepackage[inner=30mm,outer=20mm,top=30mm,bottom=20mm]{geometry} 
+\usepackage{multirow}
+\usepackage{adjustbox}
+\usepackage{mathtools}
+\usepackage{verbatim}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{minted}
+
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}%
+\newcommand{\xmark}{\ding{55}}%
+\newcommand{\smark}{\ding{83}}
+
+
+\usepackage{fancybox}
+\makeatletter
+\newenvironment{CenteredBox}{% 
+\begin{Sbox}}{% Save the content in a box
+\end{Sbox}\centerline{\parbox{\wd\@Sbox}{\TheSbox}}}% And output it centered
+\makeatother
+
+\usepackage{pgfplots}
+\usepackage{multicol}
+
+\usetikzlibrary{patterns}
+
+
+
+\input{macros/bugcaption}
+
+%========================================
+% Identificação do trabalho
+%========================================
+
+\title{Gerenciamento Dinâmico de Memória em Aplicações com Reuso de Dados no Apache Spark}
+
+\author{Donato}{Maurício Matter}
+%\autoratrue
+
+\titulacao{Mestre}
+
+\course{Pós-Graduação em Ciência da Computação }
+\initials{PPGCC} 
+\institute{Centro de Tecnologia}
+\degree{Mestre em Ciência da Computação}
+
+% Para mestrado deixar sem opção dentro do {}
+\trabalhoNumero{}
+
+\advisoronepage[Prof.]{Dra.}{Barcelos}{Patrícia Pitthan de Araújo}
+\advisor[Prof.]{Dra. (UFSM)}{Barcelos}{Patrícia Pitthan de Araújo}
+\orientadoratrue
+\committee[Dr.]{Lima}{João Vicente Ferreira}{UFSM}
+\committee[Dr.]{Wives}{Leandro Krug}{UFRGS}
+
+\date{25}{Maio}{2020} 
+
+\keyword{Spark}
+\keyword{Gerenciamento} 
+\keyword{Memória}
+\keyword{Reuso}
+\keyword{Dinâmico}
+
+\keywordAbstract{Spark}
+\keywordAbstract{Management}
+\keywordAbstract{Memory}
+\keywordAbstract{Reuse}
+\keywordAbstract{Dynamic}
+
+%========================================
+%% Início do documento
+%========================================
+\begin{document}
+	
+%========================================
+%% Capa e folha de rosto
+%========================================
+\maketitle
+
+%========================================
+%% Catalogação (obrigatório para mestrado) e Folha de aprovação
+%========================================
+\newgeometry{inner=20mm,outer=30mm,top=30mm,bottom=20mm}	
+\makeCIP{mdonato@inf.ufsm.br} %email do autor		
+\restoregeometry
+
+\includeCIP{folhaAprovacao.pdf}
+
+%========================================
+%folha de aprovação
+%========================================
+% \makeapprove
+
+%========================================
+%% Dedicatória (opcional)
+%========================================
+% \include{pessoal/dedicatoria}
+
+%========================================
+%% Agradecimentos (opcional)
+%========================================
+% \include{pessoal/agradecimento}
+
+%========================================
+%% Epígrafe (opcional)
+%========================================
+% \include{pessoal/epigrafe}
+
+%========================================
+%% Resumo
+%========================================
+\begin{abstract}
+\begin{justify}
+O Apache Spark é um \textit{framework} capaz de processar grandes quantidades de dados em memória, através da sua principal abstração: o \textit{Resilient Distributed Datasets} (RDD). Um RDD consiste em uma coleção imutável de objetos, os quais podem ser operados de maneira paralela e distribuída no\textit{cluster}. Uma vez processados, RDDs podem ser mantidos em \textit{cache}, possibilitando a sua reutilização sem realizar a sua recomputação. Conforme a computação da aplicação é feita, a memória tende a ficar sobrecarregada e, portanto, partições de RDDs devem ser removidas de acordo com o algoritmo \textit{Least Recently Used} (LRU). Este algoritmo é baseado na observação de que partições frequentemente utilizadas em um passado recente tendem a ser acessadas novamente em um futuro próximo. Deste modo, remove-se a partição cujo acesso ocorreu há mais tempo. Entretanto, há situações em que o LRU pode acarretar em uma degradação no desempenho, como é o caso onde há acessos cíclicos à memória e a quantidade de dados manipulados é maior que o espaço disponível. Nessas situações,o LRU sempre irá remover um bloco que será acessado em um futuro próximo. Considerando tal problemática, este trabalho propõe um modelo de Gerenciamento Dinâmico da Memória em Aplicações com Reuso de Dados no Apache Spark. Este modelo busca extrair métricas da aplicação em execução a fim de utilizar estas informações para realizar remoção dos dados em \textit{cache}. O modelo proposto é composto por dois componentes principais, sendo estes (1) um algoritmo de gerenciamento das partições de RDDs armazenadas em memória e (2) um agente de monitoramento responsável por obter informações sobre a execução de aplicações. O modelo de Gerenciamento Dinâmico foi validado através da realização de experimentos utilizando a plataforma Grid’5000 com os \textit{benchmarks PageRank}, \textit{K-Means} e \textit{Logistic Regression}. Os resultados obtidos demonstram que o modelo de Gerênciamento Dinâmico conseguiu realizar um melhor aproveitamento da memória disponível, chegando a reduzir em 23,94\% o tempo médio necessário para processar o \textit{benchmark Logistic Regression}, quanto comparado ao LRU. Ademais, o modelo proposto tornou a execução do Spark mais estável, reduzindo a frequência de erros no processamento dos \textit{benchmarks}. Como consequência, houve uma redução de até 34,15\% no tempo de execução do \textit{benchmark PageRank}. Portanto, estes resultados permitem concluir que estratégias dinâmicas, como a proposta por este estudo, podem proporcionar um ganho no desempenho do Spark no processamento de aplicações onde existe o reuso de dados.
+
+\end{justify} 
+\end{abstract}
+
+%========================================
+%% Abstract
+%========================================
+\begin{englishabstract}
+{Dynamic Memory Management in Applications With Data Reuse on Apache Spark}
+%%============ MANTER ESSA LINHA ============================================
+\ %%============ MANTER ESSA LINHA ==========================================
+%%============ MANTER ESSA LINHA ============================================
+\ %%============ MANTER ESSA LINHA ==========================================
+%%============ MANTER ESSA LINHA ============================================
+\ %%============ MANTER ESSA LINHA e deixar uma em branco ===================
+
+\begin{justify}
+The Apache Spark is a framework able to process a massive quantity of data in-memory, through its primary abstraction: Resilient Distributed Datasets (RDD). An RDD consists of an immutable object collection, which can be processed in a parallel and distributed way in the cluster. Once it was processed, an RDD could be stored in the cache, allowing its reuse without recomputing it. While the application's computations are done, the memory tends to be overheaded, and RDD's partitions must be removed according to the Least Recently Used (LRU) algorithm. This algorithm is based on the idea that partitions frequently used in the past will be reaccessed shortly. Thus, the algorithm removes partitions that access occurred a long time ago. However, there are situations that the LRU algorithm could introduce degradation in Spark's performance, which is the case where there is cyclic access in the memory, and the available space is lower than the dataset size. In those situations, the LRU algorithm will always remove the block, which will be accessed soon. Considering the identified issues in the LRU, this work proposes a Dynamic Memory Management in Applications With Data Reuse on Apache Spark. This model aims to extract metrics from the application's execution in order to use that information to realize data removing from the cache. The proposed model is compound by two main components, which are (1) an algorithm to manage the RDD's partitions stored int the memory and (2) a monitor agency responsible for getting information about the application. The Dynamic Management model was validated through experiments using the Grid'5000 platforms with benchmarks PageRank, K-Means, and Logistic Regression. The obtained results demonstrate that the Dynamic Management model was able to improve the utilization of available memory, being able to reduce by 23,94\% the necessary execution time to process the benchmark Logistic Regression, when it is compared to LRU.
+Furthermore, the proposed model became Spark's execution more stable, reducing the error frequency during the processing of benchmarks. As a consequence, there was a reduction by 34,14\% in the time spend to process the benchmark PageRank. Therefore, the obtained results allow concluding that dynamic strategies, like the one proposed by this work, can improve the Sparks execution in applications where there is reuse data.
+\end{justify}
+\end{englishabstract}
+
+%========================================
+%% Lista de figuras (comentar se não houver)
+%========================================
+\listoffigures
+
+%========================================
+%% Lista de tabelas (comentar se não houver)
+%========================================
+\listoftables
+
+%========================================
+%% Lista de Apêndices (comentar se não houver)
+%========================================
+%\listofappendix
+
+%========================================
+%% Lista de Anexos (comentar se não houver)
+%========================================
+%\listofannex
+
+%========================================
+%% Lista de abreviaturas e siglas
+%========================================
+ %o parametro deve ser a abreviatura mais longa
+\include{siglas/lista}
+
+%========================================
+%% Lista de simbolos (opcional)
+%========================================
+%Simbolos devem aparecer conforme a ordem em que aparecem no texto
+% o parametro deve ser o símbolo mais longo
+%\begin{listofsymbols}{teste}
+%  \item [$\nu$] Símbolos Não Terminais (Nu)
+%  \item [$\tau$] Símbolos Terminais (Tau)
+%  \item [$\rho$] Regras de Produção (Rho)
+%  \item [$\varsigma$] Símbolo Inicial (Sigma)
+%\end{listofsymbols}
+
+%========================================
+%% Sumário
+%========================================
+\tableofcontents
+
+%========================================
+%% Início da dissertação
+%========================================
+\setlength{\baselineskip}{1.5\baselineskip}
+
+\justifying
+\include{capitulos/01-introducao}
+\include{capitulos/02-fundamentacao}
+\include{capitulos/03-gerenciamento-dinamico}
+\include{capitulos/04-conclusao}
+
+\setlength{\baselineskip}{\baselineskip}
+
+%========================================
+%% Referências
+%========================================
+
+%\begin{flushleft}
+\bibliographystyle{abnt}
+\bibliography{referencias/referencias}
+%\end{flushleft}
+
+%========================================
+%% Apêndices
+%========================================
+%IMPORTANTE: Se precisar usar alguma seção ou subseção dentro dos apêndices ou anexos, utilizar o comando \tocless para não adicionar no Sumário. Exemplos: 
+% \tocless\section{Histórico}
+%\appendix
+%\include{apendices/apendicea}
+
+%========================================
+%% Anexos
+%========================================
+%\annex
+%\include{anexos/anexoa}
+
+\end{document}

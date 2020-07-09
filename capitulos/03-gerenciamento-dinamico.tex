@@ -1,0 +1,1118 @@
+\chapter{Gerenciamento Dinâmico da Memória} \label{cap:implementacoes}
+A concepção do Gerenciamento Dinâmico da Memória em Aplicações com Reuso de Dados no Apache Spark proposto por este trabalho foi realizada de forma modular. Deste modo, duas implementações foram previamente desenvolvidas até culminar na versão final do algoritmo utilizado para gerir as partições de RDDs em memória na implementação do Gerenciamento Dinâmico. A Figura \ref{fig:fluxo-evolucao-trabalho} ilustra, de forma resumida, a evolução do trabalho, descrevendo o funcionamento de cada algoritmo e as razões para sua alteração.
+
+\begin{figure}[!ht]
+    \caption{Fluxo Evolutivo do Algoritmo de Gerenciamento Dinâmico da Memória.}
+    \begin{center}
+        \includegraphics[scale=1]{imagens/fluxo-evolucao-trabalho.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor.}
+    \label{fig:fluxo-evolucao-trabalho}
+\end{figure}
+
+O primeiro algoritmo desenvolvido, a Otimização do Algoritmo LRU, tinha como objetivo agregar a Frequência de Acesso do RDD juntamente com a ordenação temporal provida pelo LRU. A Seção \ref{sec:lru-mfu} dedica-se a descrever o funcionamento deste algoritmo, junto com sua respectiva implementação. Ainda nesta Seção, são detalhados os experimentos realizados e os resultados obtidos.
+
+A partir dos problemas identificados na Otimização do Algoritmo LRU, um segundo algoritmo foi desenvolvido, sendo denominado de Algoritmo Baseado em Prioridades. Este algoritmo visava unir a Frequência de Acesso, o Tamanho da \textit{Lineage} e a Frequência de Reutilização dos RDDs a fim de gerar uma pontuação, simbolizando a prioridade deste RDD estar em memória. Detalhes relativos ao seu funcionamento, implementação, experimentos e resultados são explanados na Seção \ref{sec:alg-pesos}
+
+Utilizando como base os dois algoritmos previamente desenvolvidos, uma nova otimização do algoritmo LRU foi desenvolvida com o objetivo de corrigir as deficiências do LRU e dos algoritmos anteriores. Esta otimização tem como finalidade agregar a localidade temporal do LRU à Frequência de Reutilização dos RDDs manipulados no \textit{job}, sendo este algoritmo utilizado no \textbf{Gerenciamento Dinâmico da Memória}. A Seção \ref{sec:gerenc-dinamico} é destinada a expor este algoritmo, juntamente com os dois componentes utilizados para implantar o Gerenciamento Dinâmico da Memória, descrevendo as nuances relativas ao funcionamento e implementação no Spark. A Seção é finalizada descrevendo os experimentos e resultados obtidos pelo Gerenciamento Dinâmico.   
+
+
+
+\section{Otimização do Algoritmo LRU} \label{sec:lru-mfu}
+O algoritmo LRU utilizado nativamente pelo Spark pode ocasionar uma possível degradação no desempenho da ferramenta no processamento de aplicações com reutilização de dados. Visando sanar esta deficiência, uma primeira modificação na política de gerenciamento de memória foi implementada, a qual consistia em uma otimização do algoritmo LRU utilizado pelo \textit{framework}.
+
+A otimização desenvolvida consiste em um algoritmo que combina a \textbf{localidade temporal} do LRU com a \textbf{frequência de acesso} dos RDDs utilizados na computação do \textit{job}. A frequência de acesso tem como objetivo descrever a quantidade de vezes a qual cada RDD é utilizado no processamento da aplicação. 
+
+Para tanto, este algoritmo analisa o \textit{job} gerado pelo \textit{DAGScheduler} a fim de identificar os RDDs manipulados e obter suas respectivas frequências de acesso. A partir destas informações, mantém-se uma lista de partições dos RDDs ordenadas pela frequência de acesso. Uma vez realizada esta ordenação, conforme as novas partições dos RDDs são carregadas para a memória principal, estas partições são armazenadas de maneira ordenada pela frequência de acesso, de maneira a manter a ordenação inicial.
+
+Em cenários onde há duas ou mais entradas com a mesma frequência, estas são sub-ordenadas de acordo com o algoritmo LRU. Assim, garante-se que os RDDs mais frequentemente utilizados no processamento serão os últimos a serem removidos da memória e, em caso de empate, é removida a partição onde o acesso ocorreu há mais tempo.
+
+A implementação deste algoritmo implica na obtenção da frequência de acesso de cada RDD da aplicação e na difusão desta informação entre todos os \textit{Executors} da aplicação. As frequências de acesso dos RDDs são obtidas através do escalonador do Spark, o \textit{DAGScheduler}, antes de iniciar a execução da aplicação. Para isso, navega-se recursivamente entre o plano de execução para a computação do \textit{job} gerado pelo escalonador, com o objetivo de identificar os RDDs utilizados. O resultado desta etapa consiste em uma lista contendo todos os RDDs manipulados no \textit{job}. Em seguida, a lista gerada é utilizada para obter a frequência de acesso de cada RDD, analisando a \textit{lineage} de cada RDD. 
+
+Ao final do processo de análise da \textit{lineage}, uma estrutura de  \textit{HashMap} é gerada, mapeando cada RDD do \textit{job} com sua respectiva frequência de acesso. Assm, o consumo extra de memória será a quantidade máxima de entradas nesta estrutura de \textit{HashMap}, igual ao número de RDDs manipulados na aplicação. Cada entrada desse \textit{HashMap} possui dois inteiros, onde o primeiro inteiro corresponde ao identificador do RDD e o segundo a frequência de acesso deste mesmo RDD.
+
+Após a obtenção das frequências de acesso, o próximo passo consiste em difundir esta lista contendo as frequências de acesso entre os \textit{Executors} do \textit{cluster}. A etapa de difusão se faz necessária uma vez que apenas através do \textit{Driver} da aplicação, o qual hospeda o \textit{DAGScheduler}, é possível obter informações referentes à frequência de acesso a cada RDD do \textit{Job}. 
+
+A difusão é realizada de maneira síncrona entre todos os \textit{Executors}. O sincronismo na comunicação entre o \textit{Driver} e os \textit{Executors} garante que os dados referentes aos RDDs estejam em todos os nodos antes de seu efetivo uso. Em contrapartida, a utilização deste tipo de comunicação acarreta em um atraso no início da execução. Isto ocorre devido ao comportamento das chamadas síncronas, as quais são bloqueantes, isto é, nenhum outro processamento é realizado até a conclusão da comunicação. Consequentemente, há uma sobrecarga na execução da aplicação, atrasando o início do processamento \textit{job} em até 2 segundos, por comunicação realizada.
+
+Esta otimização do algoritmo LRU teve como objetivo priorizar aqueles RDDs com maior frequência de acesso dentro do \textit{job}, postergando sua remoção tanto quanto possível. Entretanto, conforme a \textit{lineage} cresce, os RDDs iniciais tendem a apresentar uma alta frequência de acesso, uma vez que estes RDDs são computados diversas vezes para originar novos RDDs. 
+
+Além disso, este algoritmo não considera um importante parâmetro para decidir quais partições remover: a frequência de reutilização do RDD. Este parâmetro tem relevância, uma vez que a remoção de um RDD com uma alta frequência de reutilização implica em sua completa recomputação a cada novo acesso, podendo implicar em uma degradação no desempenho do \textit{framework}. 
+
+Ademais, quando analisadas as soluções encontradas na literatura, a frequência de reutilização de um RDD se mostra uma importante métrica para o planejamento de algoritmos focados em aplicação com reutilização de dados. Junto com a frequência de reutilização, métricas auxiliares podem ser agregadas, tais como custo computacional, a fim de tornar o gerenciamento da memória mais eficiente.
+
+\subsection{Experimentos e Resultados}
+A fim de validar o algoritmo desenvolvido, foram conduzidos experimentos em um ambiente distribuído visando avaliar seu impacto no tempo de execução das aplicações. Os experimentos foram realizados utilizando os algoritmos  \textit{PageRank} e \textit{K-Means} como \textit{benchmarks}. Estes \textit{benchmarks} foram selecionados, uma vez que cada um deles apresenta um comportamento diferente no acesso à memória. 
+
+Uma característica comum aos dois \textit{benchmarks} é a reutilização de dados em computações futuras. O \textit{PageRank} visa classificar \textit{links} de acordo com suas ligações, a fim de gerar uma relevância para um determinado \textit{link}. O \textit{K-Means} consiste em agrupar os dados de entrada em $K$ grupos baseados em suas características, sendo este um algoritmo de \textit{machine learning} não supervisionado. Em todos os experimentos, os \textit{benchmarks} foram implementados pela suíte Intel HiBench \cite{huang2010hibench}.
+
+O ambiente utilizado foi a plataforma Grid'5000 \cite{bolze2006grid}, executando os \textit{benchmarks} em um \textit{cluster} com 5 nodos configurados da seguinte maneira: 1 Spark \textit{Master}; 2 Spark \textit{Workers}; 1 \textit{HDFS Namenode} e 1 \textit{HDFS Datanode}. Cada nodo do sistema era composto por um Intel Xeon X3440 @2.53GHz (4 \textit{cores}/CPU) e 16GB de memória RAM, conectados via \textit{ethernet} 1 Gbps. O sistema operacional utilizado foi o Debian 8, juntamente com Java JDK 1.8.187, Spark 2.2.0 e Hadoop 2.7.1. Além disso, cada Spark \textit{Executor} utilizou duas configurações de memória: 1GB, sendo 366,6 MB para a Memória e armazenamento e 2 GB, dos quais 912,3MB eram dedicados ao armazenamento de dados. Estas configurações de memória tinham como objetivo estressar o gerenciamento do espaço disponível, a fim de verificar o impacto do algoritmo no tempo de execução das aplicações quando comparado ao LRU nativo do Spark. Por fim, os resultados obtidos são a média aritmética de 20 execuções.
+
+Os resultados obtidos por este algoritmo são apresentados na Tabela \ref{tab:alg-erad}. Estes resultados demonstraram um desempenho similar ao LRU, apresentando pouca variação no tempo de execução. Embora os tempos obtidos sejam semelhantes, a modificação do LRU é penalizada pela necessidade de comunicação entre os nodos do \textit{cluster} para seu funcionamento. Analisando os \textit{logs} gerados pela aplicação, cada comunicação síncrona pode levar até 2 segundos para ser executada, sendo este tempo diluído no tempo total de execução da aplicação.
+
+\begin{table}[!ht]
+    \centering
+    \caption{Otimização do LRU: Tempos de Execução dos \textit{Benchmarks}}
+        \begin{tabular}{ccccc}
+            \hline
+            Benchmark & Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+            \multirow{4}{*}{K-Means} & \multirow{2}{*}{LRU} & 1 GB & 47,78 & 0,88 \\
+             &  & 2 GB & 25,48 & 0,30 \\ \cline{2-5} 
+             & \multirow{2}{*}{Otimização do LRU} & 1 GB & 46,26 & 2,68 \\
+             &  & 2 GB & 25,21 & 0,41 \\ \hline
+            \multirow{4}{*}{PageRank} & \multirow{2}{*}{LRU} & 1 GB & 179,21 & 2,48 \\
+             &  & 2 GB & 153,91 & 2,50 \\ \cline{2-5} 
+             & \multirow{2}{*}{Otimização do LRU} & 1 GB & 176,93 & 3,43 \\
+             &  & 2 GB & 152,78 & 1,85 \\ \hline
+        \end{tabular}
+    \label{tab:alg-erad}
+\end{table}
+
+A necessidade de efetuar comunicação síncrona entre o \textit{Driver} da aplicação e os \textit{Executors}, para cada \textit{job} da aplicação, faz com que o processamento não seja iniciado até que a transmissão das informações para todos os nodos seja concluída. Esta comunicação é realizada independente da necessidade e, portanto, acarreta em um aumento do tempo de execução.
+
+\section{Algoritmo Baseado em Prioridades} \label{sec:alg-pesos}
+Com o objetivo de resolver as deficiências identificadas na primeira otimização do algoritmo LRU (Seção \ref{sec:lru-mfu}), um novo algoritmo foi desenvolvido. Este algoritmo visa agregar três diferentes métricas, a saber: a Frequência de Reutilização, a Frequência de Acesso e o Tamanho da \textit{Lineage} dos RDDs. O algoritmo busca determinar uma prioridade para cada RDD ser mantido em memória, sendo esta prioridade simbolizada por uma pontuação.
+
+
+\subsection{Descrição do Algoritmo}
+O algoritmo tem como objetivo obter métricas as quais serão utilizadas para gerir a memória do Spark. Assim, após a computação do plano de execução pelo \textit{DAGScheduler}, o estágio resultante é utilizado para extrair métricas da aplicação e calcular a pontuação de cada RDD do \textit{job}. 
+
+A partir do estágio gerado, navega-se recursivamente entre as dependências do \textit{job}, a fim de identificar os RDDs manipulados. Na sequência, é realizada a extração das métricas Frequência de Reutilização, Frequência de Acesso e Tamanho da \textit{Lineage}, a partir dos RDDs mapeados previamente.
+
+Uma vez realizada a extração das métricas relativas aos RDDs do \textit{job}, o próximo passo consiste em analisar os resultados. Nessa análise, são calculadas as pontuações dos RDDs utilizados na computação do \textit{job}, simbolizando a prioridade deste RDD ser mantido em memória. A pontuação obtida é calculada a partir da frequência de reutilização multiplicada pela média aritmética da frequência de acesso somada ao tamanho da \textit{lineage}, conforme exibe a Equação \ref{eq:priorityCalculation}.
+
+A Equação \ref{eq:priorityCalculation} foi concebida com a intenção de priorizar os RDDs com maior número de reutilizações dentro do \textit{job}, em detrimento aos demais. Em situações onde não há reutilização do RDD, o algoritmo calcula uma pontuação para cada RDD baseando-se na média aritmética entre a frequência de acesso e o tamanho da \textit{lineage}. O estudo da correlação da equação proposta é discutida na Seção \ref{subsec:analise-convergencia}.
+
+\begin{equation}
+    \label{eq:priorityCalculation}
+    P = n\_reusos * (0,5 * freq\_acesso + 0,5 * tam\_lineage)
+\end{equation}
+
+Após concluídos o processamento e o cálculo das prioridades dos RDDs, o resultado final consiste em uma lista mapeando todos os RDDs com suas respetivas pontuações. Esta lista é armazenada no \textit{Driver}. A difusão da lista com as pontuações de cada RDD é realizada entre os nodos do \textit{cluster} sob demanda. Isso significa que a comunicação entre o \textit{Executor} e o \textit{Driver} irá ocorrer apenas quando a memória desse \textit{Executor} estiver sobrecarregada e necessitando realizar a remoção de partições da memória. 
+
+Em caso de sobrecarga, o \textit{Executor} irá solicitar a lista contendo a pontuação de cada RDD do \textit{job}. Essa requisição ocorre em duas situações: quando a lista com as pontuações está vazia e quando o identificador de uma partição não é encontrado. O \textit{status} de lista vazia significa que o processamento da aplicação começou recentemente e nenhum bloco foi removido. A ausência de um identificador na lista indica que um novo \textit{job} iniciou e novos RDDs foram manipulados, necessitando que a lista de pontuações seja atualizada no \textit{Executor}.  
+
+\subsection{Métricas utilizadas}
+O Algoritmo Baseado em Prioridade foi concebido com o objetivo de agregar três métricas e, a partir destas, determinar a ordem em que as partições de RDDs serão removidas. Assim, utiliza-se a Frequência de Acesso, o Tamanho da \textit{Lineage} e a Frequência de Reutilização de cada RDD que será manipulado no processamento do \textit{job}.
+
+A \textbf{frequência de acesso} descreve o número de vezes que um RDD será utilizado na computação do \textit{job}. Este número determina a quantidade de recomputações que serão realizadas utilizando o RDD caso este não seja armazenado em \textit{cache}. Por exemplo, para a \textit{lineage} $L = \{ R_1 \rightarrow R_2 \rightarrow R_3 \}$, se for aplicada uma ação aos RDDs $R_2$ e $R_3$, o $R_1$ será computado duas vezes, sendo a primeira para o subconjunto $SL = \{ R_1 \rightarrow R_2 \}$ e uma segunda vez para a \textit{lineage L}. 
+
+O \textbf{tamanho da \textit{lineage}} representa a quantidade de RDDs que devem ser previamente processados até que seja possível computar o RDD cuja ação foi aplicada. Dada a \textit{lineage} $L = \{ R_1 \rightarrow R_2  \rightarrow R_3 \}$, o tamanho da \textit{lineage} de $R_3$ é igual a 2, uma vez que deve-se necessariamente computar $R_1$ e $R_2$ até ser possível computar $R_3$. Salienta-se que, quanto maior o tamanho da \textit{lineage} de um RDD, maior será o tempo exigido para recomputá-lo se necessário.
+
+A \textbf{frequência de reutilização} refere-se ao número de vezes que o RDD será referenciado durante a computação do \textit{job}. Assim, a obtenção do grafo de dependências visa identificar os RDDs com maior frequência de reutilização dentro do processamento. A Figura \ref{fig:lineage-pagerank} exemplifica o grafo de dependências gerado durante a execução da aplicação \textit{Pagerank}.
+
+\begin{figure}[!ht]
+    \caption{Grafo de Dependências da Aplicação PageRank}
+    \begin{center}
+        \includegraphics[scale=0.33]{imagens/lineage-graph-pagerank.png}
+    \end{center}
+    \small{Fonte: \cite{zaharia2012rdd}}
+    \label{fig:lineage-pagerank}
+\end{figure}
+
+Analisando o grafo gerado na Figura \ref{fig:lineage-pagerank}, inicialmente é realizada a carga de um arquivo de entrada. A seguir, é aplicada uma função de \textit{map} para gerar o RDD contendo os \textit{links}. Durante a execução a aplicação, o RDD \textit{links} é frequentemente reutilizado na geração de novos RDDs com resultados intermediários. Como consequência, este RDD torna-se um candidato a ser armazenado em \textit{cache}, a fim de evitar sua recomputação a cada utilização e consequentemente reduzir o tempo de processamento da aplicação. Nesse exemplo, o RDD \textit{links} possui uma frequência de reutilização igual a 3, enquanto os demais RDDs do \textit{job} apresentam frequência igual a 1.
+
+
+\subsection{Implementação}
+Para realizar a implementação do Algoritmo Baseado em Prioridades, a primeira etapa do processo consiste na extração de métricas da aplicação a partir dos RDDs que serão utilizados no \textit{job}. Para tanto, parte-se do RDD cuja ação foi aplicada, até não encontrar novas dependências. Na sequência, navega-se, de forma recursiva, nas dependências do estágio gerado pelo \textit{DAGScheduler} para realizar o processamento do \textit{job}. 
+
+Este processo é exemplificado através do método exibido no Algoritmo \ref{alg:lista-rdds}. Primeiro, adiciona-se o RDD visitado na lista de RDDs já processados (Linha 3) e em seguida, percorre-se cada dependência adicionada na lista de dependências do RDD visitado (Linhas 4--6). Por fim, se a dependência ainda não foi processada (Linha 5), repete-se este mesmo processo para a dependência em questão (Linha 6). O resultado desta primeira etapa consiste em uma lista contendo todos os RDDs que serão criados e manipulados durante a computação do \textit{job}. 
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+        \caption{Identificação dos RDDs utilizados no \textit{job}.}
+        \label{alg:lista-rdds}
+        \Entrada{StageResult gerado pelo DAGScheduler.}
+        \Saida{Lista com todos os RDDs identificados no \textit{job}.}
+        rddsDependencies $\leftarrow$ List[RDD]\;
+        
+        \SetKwProg{Fn}{Function}{ is}{end}
+        \Fn{getRddsUsedInJob(rdd: RDD[\_], rddsDependencies: List[RDD])}{
+           rddsDependencies += rdd\;
+           
+           \ForEach{deps in rdd.dependencies}{
+                \If{deps $\notin$ rddsDependencies}{
+                    getRddsUsedInJob(deps, rddsDependencies)\;
+                }
+           }
+        }
+    \end{algorithm}
+\end{figure}
+
+Após a identificação dos RDDs, a próxima etapa consiste na coleta das métricas desejadas, as quais serão utilizadas no processo de gerência de memória. O processo de coleta utilizado é ilustrado pelos métodos apresentados nos Algoritmos \ref{alg:tamanho-lineage-rdds}, \ref{alg:frequencia-acesso-rdds} e \ref{alg:frequencia-reutilizacao-rdds}, cada qual responsável por obter uma determinada métrica.
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+        \caption{Obtenção do Tamanho da \textit{Lineage}}
+        \label{alg:tamanho-lineage-rdds}
+        \Entrada{List[RDD] contendo os RDDs utilizados no job}
+        \Saida{Estrutura HashMap contendo o id do RDD e seu respectivo tamanho da \textit{lineage}.}
+        lineageSize $\leftarrow$ HashMap[RDD, Int]\;
+        
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{getLineageSize(rdd: RDD[\_], rddID: Int, list: HashMap[RDD, Int], visited: List[RDD])} {
+           update(lineageSize[rddId])\; 
+           
+           \ForEach{deps in rdd.dependencies} {
+                \If{deps $\notin$ visited} {
+                    visited += deps\;
+                    getLineageSize(deps, rddID, list, visited)\;
+                }
+           }
+        }
+    \end{algorithm}
+\end{figure}
+
+O método \textit{getLineageSize}, ilustrado pelo Algoritmo \ref{alg:tamanho-lineage-rdds}, visa obter o tamanho da \textit{Lineage} de um RDD. Para isto, atualiza-se o tamanho atual do RDD, iniciando em 0 (Linha 3). Em seguida, percorre-se as dependências desse RDD (Linhas 4--9) verificando se a dependência em questão ainda não foi processada (Linha 5). Caso a dependência não tenha sido processada, adiciona-se esta à lista de nodos visitados (Linha 6) e processa-se esta nova dependência (Linha 7). 
+
+Nesta implementação é importante evitar que uma dependência seja visitada mais de uma vez, impedindo que um mesmo RDD seja contabilizado diversas vezes. O resultado desse método consiste em um mapa onde as chaves são os RDDs e o tamanho de suas \textit{lineages}. Este método deve ser chamado de forma individual para cada RDD manipulado no \textit{job}.
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+        \caption{Obtenção da Frequência de Acesso}
+        \label{alg:frequencia-acesso-rdds}
+        \Entrada{List[RDD] contendo os RDDs utilizados no job}
+        \Saida{Estruturas HashMap contendo o id do RDD e sua respectiva frequência de acesso.}
+        frequencyAccess $\leftarrow$ HashMap[RDD, Int]\;
+        
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{getUseFrequency(rdd: RDD[\_], frequencyAccess: List[RDD])} {
+           update(frequencyAccess[rdd])\;
+           
+           \ForEach{deps in rdd.dependencies} {
+                getUseFrequency(deps, frequencyAccess)\;
+           }
+        }
+    \end{algorithm}
+\end{figure}
+
+O método \textit{getUseFrequency}, denotado no Algoritmo \ref{alg:frequencia-acesso-rdds}, apresenta um comportamento semelhante ao método utilizado para contabilizar o tamanho da \textit{Lineage} (\textit{getLineageSize)}, mas com o objetivo de obter a frequência de Acesso de um RDD. Assim, primeiro atualiza-se a frequência do RDD, iniciando em 1 (Linha 3). Na sequência, percorre-se as dependências do RDD (Linhas 4--6), processando-as. 
+
+Neste método não há necessidade de realizar o controle dos nodos visitados, uma vez que o RDD deve ser acessado para a computação de cada novo RDD gerado a partir deste. Ao final de sua execução, o resultado é uma estrutura mapeando cada RDD com sua respectiva quantidade de acesso.
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+        \caption{Obtenção da Frequência de Reutilização}
+        \label{alg:frequencia-reutilizacao-rdds}
+        \Entrada{List[RDD] contendo os RDDs utilizados no job}
+        \Saida{Estruturas HashMap contendo o id do RDD e sua respectiva frequência de reutilização.}
+        reuseFrequency $\leftarrow$ HashMap[RDD, Int]\;
+        
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{getRDDsReuse(rddList: List[RDD], reuseFrequency: HashMap[RDD, Int])} {
+           
+           \ForEach{rdd in rddList} {
+                dependencies $\leftarrow$  rdd.dependencies\;
+                \ForEach{deps in dependencies} {
+                    update(reuseFrequency[deps])\;
+                }
+           }
+        }
+    \end{algorithm}
+\end{figure}
+
+O método \textit{getRDDsReuse}, ilustrado pelo Algoritmo \ref{alg:frequencia-reutilizacao-rdds}, visa obter a frequência de reutilização de cada RDD manipulado. Esse processo é realizado de modo que, para cada RDD do \textit{job} (Linhas 3--8), percorre-se todas as dependências do RDD (Linhas 4--7) e agrega-se a quantidade de reutilização de cada RDD em tais dependências (Linha 6). Ao final do processamento, é gerado um mapa contendo como chave o RDD e como valor a sua respectiva frequência de reutilização.
+
+Conforme demonstrado pelo Algoritmo \ref{alg:calculo-prioridade-rdds}, o método responsável calcular a prioridade de cada RDD visa iterar sobre todos os RDDs identificados previamente  (Linhas 5--11) e calcular sua respectiva prioridade. Este cálculo é realizado utilizando o tamanho da \textit{lineage} (Linha 6), a frequência de acesso (Linha 7) e a frequência de reutilização (Linha 8). O resultado deste cálculo consiste na prioridade do RDD (Linha 9), a qual será mantida em uma lista contendo todos os RDDs utilizados no \textit{job} (Linha 10) e posteriormente ordenados de maneira decrescente por prioridade (Linha 12).
+
+Os RDDs com pontuações maiores, encontrados se nas posições iniciais da lista, deverão ter suas partições removidas o mais tarde possível. Deste modo, prioriza-se aqueles RDDs com maior frequência de reutilização em processamentos subsequentes a fim de eliminar a necessidade de recomputá-los a cada utilização.
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+        \caption{Cálculo da Prioridade do RDD.}
+        \label{alg:calculo-prioridade-rdds}
+        \Entrada{Três HashMaps contendo as métricas extraídas do \textit{job}.}
+        \Saida{Lista ordenada contendo a prioridade de cada RDD.}
+        rdds $\leftarrow$ List[RDD]\;
+        lineageSize, frequencyAccess, reuseFrequency $\leftarrow$ HashMap[RDD, Int]\;
+        
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{getRddsUsedInJob()} {
+           priority $\leftarrow$ HashMap[RDD, Float]\;
+           \ForEach{rdd in rdds}{
+                size $\leftarrow$ lineageSize[rdd]\;
+                access $\leftarrow$ frequencyAccess[rdd]\;
+                reuse $\leftarrow$ reuseFrequency[rdd]\;
+                
+                value $\leftarrow$ reuse * (size * 0,5 + access * 0,5)\;
+                priority.add(rdd, value)\;
+           }
+           
+           return sort(priority)\;
+        }
+    \end{algorithm}
+\end{figure}
+
+Após a conclusão do processamento e do cálculo das prioridades dos RDDs do \textit{job}, o resultado final é armazenado no \textit{Driver} da aplicação. A difusão da lista com as prioridades de cada RDD é realizada entre os nodos do \textit{cluster} sob demanda. Isso significa que a comunicação entre um \textit{Executor}, hospedado pelos nodos \textit{Workers}, e o \textit{Driver} irá ocorrer apenas quando a memória desse \textit{Executor} estiver sobrecarregada e necessitando realizar a remoção de partições. 
+
+Nessas situações de sobrecarga da memória, o Spark \textit{Executor} irá solicitar a lista contendo a prioridade de cada RDD do \textit{job}. Embora haja penalização no tempo de comunicação, esta requisição é realizada utilizando comunicação síncrona entre o \textit{Driver} e o \textit{Executor}. O sincronismo é necessário, uma vez que a lista com as prioridades é uma informação fundamental para realizar a ordenação das partições em memória e a remoção de dados.
+
+
+A requisição de atualização da lista de prioridade ocorre em duas situações: quando a lista com as prioridades está vazia e quando o identificador de uma partição não é encontrado. A ausência de um identificador na lista indica que um novo \textit{job} iniciou e novos RDDs foram manipulados, necessitando que a lista de prioridades seja atualizada em cada \textit{Executor}. O \textit{status} de lista vazia significa que o processamento da aplicação começou recentemente e nenhum bloco foi removido. 
+
+
+\subsection{Análise de Correlação} \label{subsec:analise-convergencia}
+A fim de verificar a correlação da Equação \ref{eq:priorityCalculation}, proposta na Seção \ref{sec:alg-pesos}, realizou-se uma análise de correlação do método utilizado para calcular a prioridade de cada RDD. Esta é uma análise flexível, que pode ser usada sempre que uma variável quantitativa for estudada em função a qualquer fator de interesse \cite{cohen2014applied}. Esta análise tem como objetivo medir o grau de dependência entre duas variáveis, sendo indicada para avaliar a hipótese de que o aumento ou decréscimo em uma variável está associado ao comportamento de outra.
+
+Através do coeficiente de Pearson \cite{benesty2009pearson}, responsável por representar a correlação entre as variáveis observadas, é possível medir o grau de relacionamento entre as variáveis. Este coeficiente, o qual é desprovido de unidade ou ordem de grandeza, assume valores entre -1 e 1. Valores maiores que 0 indicam uma correlação positiva, isto é, ambas as variáveis observadas movem-se na mesma direção e a relação é mais forte quando o resultado se aproxima de 1. De modo similar, valores menores que 0 indicam uma correlação negativa, ou seja, as variáveis movem-se em direções contrárias e essa correlação é mais forte quando o resultado se aproxima de -1. Por fim, um coeficiente igual a 0 indica que não há correlação entre as variáveis observadas.
+
+
+Para realizar a análise de correlação da equação proposta (Equação \ref{eq:priorityCalculation}), desenvolveu-se uma aplicação Python\footnote{https://www.python.org/}, com o objetivo de simular o comportamento e a configuração de diferentes \textit{lineages} dentro de um \textit{job} no Spark. Esta aplicação é composta por três funções:
+
+\begin{enumerate}
+	\item[a)] Geração de uma \textit{lineage}: consiste em gerar diferentes combinações de \textit{lineages} possíveis dentro de um \textit{job};
+	\item[b)] Obtenção das métricas desejadas: visa extrair, a partir da \textit{lineage}, as métricas referentes ao tamanho da \textit{lineage}, à frequência de acesso e à frequência de reutilização;
+	\item[c)] Cálculo da prioridade de cada RDD extraído: objetiva criar uma lista de prioridades para cada combinação de tamanho da \textit{lineage}, frequência de acesso e frequência de reutilização gerada pela aplicação.
+\end{enumerate}
+
+A aplicação visa simular a extração de métricas de forma análoga ao implementado no Spark. Assim, a análise foi realizada utilizando \textit{lineages} com tamanho variando entre 5 e 60, onde, para cada configuração de tamanho, variou-se a frequência de reutilização entre 1\% e 70\% do tamanho da \textit{lineage}, totalizando 46,561 configurações para o cálculo da prioridade dos RDDs. Estas configurações de \textit{lineage} tinham como objetivo simular o comportamento de aplicações com diferentes quantidades de reutilização de RDDs.
+
+Os resultados desta análise demonstram que existe uma forte correlação positiva entre a prioridade calculada e a frequência de reutilização, atingindo um coeficiente de correlação superior a 0,94. Quando examinamos as demais variáveis, ambas também apresentam uma correlação positiva com a prioridade calculada, com coeficientes iguais a 0,32 e 0,013 para a frequência de acesso e tamanho da \textit{lineage}, respectivamente. 
+
+Conforme demonstrado pela análise de correlação realizada na equação proposta, o fator determinante para o crescimento da pontuação recebida pelo RDD é a frequência de reutilização, dada a sua alta correlação com o resultado da equação proposta. As demais métricas utilizadas apresentam pouca influência no resultado final geral, exercendo maior influência em situações onde a frequência de reutilização é igual para todos os RDDs.
+
+Uma consequência desse algoritmo baseado em prioridades é um comportamento imprevisível em aplicações onde há uma mesma frequência de reutilização de vários RDDs. Em tais situações, o critério para diferenciar uma prioridade das demais será calculada baseando-se apenas na frequência de acesso e tamanho da \textit{lineage}. Ademais, a utilização de métricas auxiliares apresentam pouco impacto no resultado gerado, ao mesmo tempo que tornam a implementação do algoritmo proposto mais complexa.
+
+\subsection{Experimentos e Resultados}
+A validação do Algoritmo Baseado em Prioridades, apresentado na Seção \ref{sec:lru-mfu}, foi realizada através de experimentos em um \textit{cluster} distribuído. Os experimentos foram conduzidos na plataforma Grid'5000, utilizando um \textit{cluster} com 7 nodos, sendo a escolha desta configuração realizada tendo como base o tamanho do conjunto de dados utilizado nos experimentos. Assim, através desta configuração de \textit{cluster}, torna-se possível criar cenários com diferentes cargas de acesso a memória.
+
+Os nodos selecionados foram configurados da seguinte maneira: 1 Spark \textit{Master}, 4 Spark \textit{Workers} hospedando 1 \textit{Executor} por nodo, 1 nodo executando o \textit{HDFS Namenode} e \textit{HDFS Datanode} e 1 nodo executando o \textit{HDFS Datanode}. Cada nodo do sistema era composto por dois Intel Xeon E5-2630 v3 @2.2GHz (8 \textit{cores}/CPU), 128GB de memória RAM e dois HDs de 558GB, conectados via \textit{ethernet} 10Gbps. O sistema operacional utilizado foi o Debian 8, juntamente com Java JDK 1.8.202, Spark 2.2.0 e Hadoop 2.7.1. 
+
+% [corrigido]
+Para os experimentos, utilizou-se os algoritmos \textit{PageRank}, \textit{K-Means} e \textit{Logistic Regression} como \textit{benchmarks}, sendo estes implementados pelo Intel HiBench \cite{huang2010hibench}. O \textit{benchmark Logistic Regression} consiste em um tipo de análise estatística utilizada frequentemente para análise preditiva. A inclusão deste \textit{benchmark} tem como objetivo obter uma melhor amostra de aplicações com diferentes tamanhos e disposições das \textit{lineages}. Ainda, foram utilizados dois tamanhos de \textit{datasets}: \textit{small} e \textit{large}. A Tabela \ref{tab:tamanho-datasets} apresenta o tamanho destes \textit{datasets} em cada \textit{benchmark}.
+
+\begin{table}[!ht]
+    \centering
+        \caption{Tamanho dos Datasets utilizados}
+        \label{tab:tamanho-datasets}
+            \begin{tabular}{cccc}
+                \hline
+                Tamanho & PageRank & K-Means & Logistic Regression \\ \hline
+                Small & 1,7 MB & 574,6 MB & 76,4 MB \\
+                Large & 247,9 MB & 3,7 GB & 7,5 GB \\ \hline
+        \end{tabular}
+\end{table}
+
+Além da variação no tamanho dos \textit{datasets} utilizados, cada Spark \textit{Executor} teve a sua memória variando entre 4 configurações distintas: 1 GB, 1,5 GB, 2 GB e 4 GB. É importante ressaltar que estas configurações representam a memória total disponibilizada para o \textit{Executor}, ou seja, incluem a Memória de Armazenamento, a Memória de Execução e a Memória do Usuário.
+
+O espaço dedicado ao armazenamento de informações corresponde a uma fração da quantidade total de memória disponível. Deste modo, na Tabela \ref{tab:memoria-algo-prioridades} são demonstrados três valores de memória: Memória Total, Memória de Armazenamento e Memória Total de Armazenamento Disponível. A Memória Total descreve ao espaço total disponível para ser dividido entre as 3 regiões de memória do Spark (Memória de Execução, Memória de Armazenamento e Memória do Usuário). A Memória de Armazenamento se refere à fração de memória destinada ao armazenamento dos dados no \textit{Executor}, ou seja, o espaço disponível para manter dados em \textit{cache}. Por fim, a Memória Total de Armazenamento Disponível denota o somatório da Memória de Armazenamento de todos os \textit{Executors} do \textit{cluster}, simbolizando o espaço máximo para realizar o armazenamento dos dados.
+
+\begin{table}[!ht]
+    \caption{Configuração de Memória Utilizada - Algoritmo Baseado em Prioridades}
+    \label{tab:memoria-algo-prioridades}
+    \centering
+    \scalebox{0.9}{
+    \begin{tabular}{ccc}
+        \hline
+        Memória Total & Memória de Armazenamento & Memória Total de Armazenamento Disponível \\ \hline
+        1 GB & 366,3 MB & 1465,2 MB \\
+        1.5 GB & 639,3 MB & 2557,2 MB \\
+        2 GB & 912,3 MB & 3649,2 MB \\
+        4 GB & 2004,4 MB & 8018,4 MB \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+As variações na quantidade de memória utilizada, bem como no tamanhos dos \textit{datasets}, têm como objetivo avaliar O Algoritmo Baseado em Prioridades sob duas condições. A primeira condição é em situações onde a memória disponível é suficiente para comportar o \textit{dataset}. A segunda, em situações de sobrecarga exigindo que seja feita a substituição de partições em memória. Os resultados obtidos na experimentação representam os tempos de execução dos \textit{benchmarks} utilizando o Algoritmo Baseado em Prioridades em contraponto ao LRU nativamente implementado pelo Spark. Assim, estes resultados são a média aritmética de 20 execuções dos \textit{benchmarks} em cada configuração.
+
+Os resultados demonstrados na Tabela \ref{tab:algo-prioridade-resultado-small} e na Figura \ref{fig:algo-prioridade-resultado-small} referem-se à utilização de um \textit{dataset small}. Já a Tabela \ref{tab:algo-prioridade-resultado-large} e a Figura  \ref{fig:algo-prioridade-resultado-large} exibem os resultados obtidos com um \textit{dataset large}. Quando analisamos os resultados obtidos com o \textit{dataset small}, durante a execução do \textit{benchmark K-Means} houve necessidade de realizar a substituição de partições da memória. Esta necessidade pode ser verificada através dos \textit{logs} de execução dos \textit{benchmarks}. Nestes casos, o Algoritmo por Prioridades foi 40,74\% e 23,5\% mais rápido quando comparado com o LRU com as configurações de 1 GB e 1,5 GB, conforme demonstrado pela Figura \ref{fig:algo-prioridade-resultado-small}(a). Quando há espaço disponível para todo o conjunto de dados, o desempenho de ambos os algoritmos é equivalente, uma vez que nenhuma partição foi removida da memória. Estas situações podem ser observadas nas Figuras \ref{fig:algo-prioridade-resultado-small}(b) e \ref{fig:algo-prioridade-resultado-small}(c), apresentando um tempo de execução similar nesta configuração.
+
+
+
+\begin{table}[!ht]
+    \caption{Tempos de Execução dos Benchmarks: \textit{Dataset small}}
+    \label{tab:algo-prioridade-resultado-small}
+    \centering
+    \scalebox{0.9}{
+    \begin{tabular}{ccccc}
+        \hline
+        Benchmark & Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+        \multirow{6}{*}{Pagerank} & LRU & 1G & 7,95 & 0,19 \\
+         & Prioridades & 1 GB & 8,27 & 0,31 \\ \cline{2-5} 
+         & LRU & 1,5 GB & 7,98 & 0,32 \\
+         & Prioridades & 1,5 GB & 8,11 & 0,36 \\ \cline{2-5} 
+         & LRU & 2 GB & 7,95 & 0,34 \\
+         & Prioridades & 2 GB & 8,16 & 0,40 \\ \hline
+        \multirow{6}{*}{K-Means} & LRU & 1 GB & 29,16 & 4,94 \\
+         & Prioridades & 1 GB & 17,28 & 0,69 \\ \cline{2-5} 
+         & LRU & 1,5 GB & 22,72 & 2,10 \\
+         & Prioridades & 1,5 GB & 17,38 & 0,46 \\ \cline{2-5} 
+         & LRU & 2 GB & 15,14 & 0,42 \\
+         & Prioridades & 2 GB & 15,55 & 0,63 \\ \hline
+        \multirow{6}{*}{LR} & LRU & 1 GB & 16,94 & 0,56 \\
+         & Prioridades & 1 GB & 16,51 & 0,19 \\ \cline{2-5} 
+         & LRU & 1,5 GB & 16,64 & 0,18 \\
+         & Prioridades & 1,5 GB & 16,57 & 0,21 \\ \cline{2-5} 
+         & LRU & 2 GB & 16,73 & 0,30 \\
+         & Prioridades & 2 GB & 16,59 & 0,18 \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+
+
+\begin{figure}[!ht]
+    \centering
+    \caption{Tempos de Execução dos Benchmarks: Dataset Small}
+    \includegraphics[scale=0.85]{imagens/resultados-dateset-small.pdf}
+    \label{fig:algo-prioridade-resultado-small}
+\end{figure}
+
+Conforme exibem a Tabela \ref{tab:algo-prioridade-resultado-large} e a Figura \ref{fig:algo-prioridade-resultado-large}, quando analisamos os dados com um \textit{dataset} maior, os resultados obtidos demonstram que o Algoritmo Baseado em Prioridades, em média, pode apresentar um desempenho igual ou superior ao LRU nas mesmas condições. Examinando os resultados do \textit{benchmark K-Means} (Figura \ref{fig:algo-prioridade-resultado-large}(a)), constata-se que ambos algoritmos apresentaram desempenho equivalente em todas as configurações. Uma análise dos \textit{logs} gerados por essa aplicação revela que a memória comporta todo o \textit{dataset}, quando utilizadas as configurações de 2 GB e 4 GB. Nas configurações de 1 GB e 1,5 GB, a memória encontra-se fortemente sobrecarregada, uma vez que o \textit{dataset} ocupa todo o espaço disponível. Nesses casos, partições de dados serão descarregadas da memória de forma inevitável, a fim de liberar espaço para armazenamento de novos dados.
+
+
+\begin{table}[!ht]
+    \caption{Tempos de Execução do Algoritmo utilizando o \textit{Dataset large}}
+    \label{tab:algo-prioridade-resultado-large}
+    \centering
+    \scalebox{0.90}{
+    \begin{tabular}{ccccc}
+        \hline
+        Benchmark & Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+        \multirow{8}{*}{Pagerank} & LRU & \multirow{2}{*}{1 GB} & 156,40 & 36,92 \\
+         & Prioridades &  & 150,11 & 21,51 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{1,5 GB} & 222,76 & 73,78 \\
+         & Prioridades &  & 194,79 & 59,55 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{2 GB} & 64,90 & 2,46 \\
+         & Prioridades &  & 65,09 & 1,98 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{4 GB} & 59,54 & 2,55 \\
+         & Prioridades &  & 59,69 & 2,53 \\ \hline
+        \multirow{8}{*}{K-Means} & LRU & \multirow{2}{*}{1 GB} & 454,72 & 11,69 \\
+         & Prioridades &  & 450,19 & 13,44 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{1,5 GB} & 317,09 & 7,94 \\
+         & Prioridades &  & 315,76 & 10,28 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{2 GB} & 149,64 & 6,33 \\
+         & Prioridades &  & 148,47 & 4,79 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{4 GB} & 40,02 & 2,07 \\
+         & Prioridades &  & 39,85 & 1,58 \\ \hline
+        \multirow{8}{*}{LR} & LRU & \multirow{2}{*}{1 GB} & 0 & 0 \\
+         & Prioridades &  & 0 & 0 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{1,5 GB} & 0 & 0 \\
+         & Prioridades &  & 0 & 0 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{2 GB} & 1180,35 & 25,72 \\
+         & Prioridades &  & 1048,58 & 14,01 \\ \cline{2-5} 
+         & LRU & \multirow{2}{*}{4 GB} & 278,59 & 11,84 \\
+         & Prioridades &  & 264,68 & 11,09 \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+Devido a restrições de disponibilidade de memória, ambos os algoritmos não conseguiram executar o \textit{Benchmark Logistic Regression} nas configurações com 1 GB e 1,5 GB disponíveis, conforme ilustram a Tabela \ref{tab:algo-prioridade-resultado-large}
+e a Figura  \ref{fig:algo-prioridade-resultado-large}(b). Investigando os \textit{logs} de execução do \textit{Logistic Regression}, verificou-se que todas as execuções foram interrompidas devido a uma exceção do tipo \textit{OutOfMemoryError}. Esta exceção ocorre quando a JVM gasta uma grande quantidade de tempo executando a rotina de remoção de memória do \textit{Garbage Collector}, provocado pela exaustão da memória disponível. Na configuração com configuração de 2 GB de memória, o Algoritmo Baseado em Prioridades reduziu em 11,16\% o tempo de execução desta aplicação quando comparado ao comparado ao LRU. Por fim, utilizando 4 GB, o Algoritmo Baseado em prioridades foi 4,99\% mais rápido que o LRU nas mesmas condições.
+
+
+\begin{figure}[!ht]
+    \centering
+    \caption{Tempos de Execução dos Benchmarks: Dataset Large}
+    \includegraphics[scale=0.85]{imagens/resultados-dateset-large.pdf}
+    \label{fig:algo-prioridade-resultado-large}
+\end{figure}
+
+Com o \textit{benchmark Pagerank} (Figura \ref{fig:algo-prioridade-resultado-large}(c)), o Algoritmo por Prioridades foi 5,3\% mais rápido na configuração com configuração de 1GB, e 12,56\% mais rápido quando há 1,5 GB disponíveis, se comparados ao LRU nas mesmas condições. Semelhante ao ocorrido quando utilizado a configuração com \textit{dataset} menor, nas configurações com 2 GB e 4 GB o desempenho foi equivalente, uma  vez que foi possível manter todos os dados em memória e, consequentemente, não houve necessidade de substituições de partições da memória.
+
+
+\section{Gerenciamento Dinâmico da Memória} \label{sec:gerenc-dinamico}
+A utilização de métricas obtidas da aplicação em execução pode trazer bons resultados, diminuindo o tempo necessário para realizar o processamento da mesma, especialmente em cenários onde há reutilização de de dados. Entretanto, analisando o funcionamento do LRU implementado nativamente pelo Spark, percebe-se que essa solução funciona de maneira reativa. Isto significa que é executada em situações onde o Spark detecta a inexistência de espaço disponível para armazenamento de novas informações. 
+
+Na implementação do LRU nativa no Spark, após a detecção da indisponibilidade de espaço, as rotinas de gerenciamento de memória são executadas com o objetivo de remover a quantidade de dados suficientemente grande para comportar os novos dados da memória. Por consequência, a execução da aplicação é interrompida e postergada até que as rotinas de remoção de blocos da memória sejam completamente executadas.
+
+Este trabalho implementa um modelo de Gerenciamento Dinâmico da Memória para aplicações onde há reutilização de dados. O modelo visa monitorar a aplicação em execução a fim de identificar, de forma antecipada, a necessidade de realizar a remoção de blocos de memória. Através desta abordagem, busca-se diminuir a sobrecarga das operações de substituição de blocos da memória.
+
+A implementação do Gerenciamento Dinâmico é divida em dois componentes: um algoritmo de substituição de blocos da memória e um agente externo. O algoritmo tem como objetivo estabelecer um critério, baseando-se em informações extraídas da aplicação em execução, para decidir qual bloco deve ser removido da memória. Para tanto, este algoritmo visa agregar a Frequência de Reutilização dos RDDs utilizados no \textit{job} juntamente com o algoritmo LRU.
+
+O algoritmo utilizado no Gerenciamento Dinâmico consiste em uma otimização do LRU, sendo este uma evolução do algoritmo apresentado na Seção \ref{sec:alg-pesos}, com o objetivo de priorizar RDDs com reutilização dentro do \textit{job}. Para tanto, descarta-se as métricas com baixa relevância, ou seja, a Frequência de Acesso e Tamanho da \textit{Lineage}, identificadas na análise de correlação (Seção \ref{subsec:analise-convergencia}), fazendo uso apenas da Frequência de Reutilização. 
+
+O algoritmo implementado no modelo de gerenciamento mantém uma lista ordenada pela Frequência de Reutilização dos RDDs identificados no \textit{job} e, em caso de empate, utiliza-se o algoritmo LRU para realizar a sub-ordenação dessas partições. Deste modo, em situações onde não há reutilização de RDDs, o comportamento do algoritmo será semelhante ao LRU implementado nativamente pelo Spark.
+
+O Agente Externo visa obter métricas, sendo estas o consumo de memória, a quantidade de estágios de um \textit{job} e o \textit{status} da execução destes estágios, através da API REST do Spark. A partir dessas métricas, busca-se antecipar a necessidade de espaço livre em memória. Assim, pode-se executar rotinas de remoção de blocos da memória em segundo plano, de modo a reduzir a sobrecarga causada por tais operações.
+
+O modelo de Gerenciamento da Memória implementado, exibido na Figura \ref{fig:arquitetura-dinamica}, é composto por:
+\begin{enumerate}
+	\item[a)] 1 nodo \textit{Spark Master}, responsável por gerenciar os contextos das aplicações;
+	\item[b)] $n$ nodos \textit{Spark Workers}, os quais possibilitam a escalabilidade do \textit{cluster} Spark;
+	\item[c)] o \textit{Agente Observador}, cuja função é monitorar a aplicação;
+	\item[d)] 1 nodo ZooKeeper, a fim de viabilizar a comunicação entre o Agente Observador e os nodos \textit{Spark Workers}.
+\end{enumerate}
+
+\begin{figure}[!ht]
+    \caption{Modelo de Gerenciamento Dinâmico de Memória.}
+    \begin{center}
+        \includegraphics[scale=0.9]{imagens/arquitetura-dinamica.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:arquitetura-dinamica}
+\end{figure}
+
+No modelo de Gerenciamento Dinâmico da Memória, o \textit{Spark Master} é nodo responsável por hospedar o \textit{driver} da aplicação, juntamente com o seu contexto. Além disso, cabe ao \textit{Spark Master} gerenciar e distribuir tarefas para os nodos \textit{Workers} de modo a executar a aplicação. Durante a realização das computações requeridas pela aplicação, o \textit{Master} disponibiliza a sua API REST, onde o usuário pode efetuar requisições com o objetivo de instrumentar e obter estatísticas relacionas à execução. Através destas requisições, pode-se identificar as aplicações executando no \textit{cluster}, o \textit{status} da execução destas apliações, os RDDs armazenados em \textit{cache} e o consumo das memórias de armazenamento e execução.
+
+O nodo ZooKeeper tem como objetivo prover os serviços deste \textit{framework}, permtindo a sincronização e a troca de mensagens entre o \textit{Agente Observador} e os nodos \textit{Workers} do Spark. Deste modo, foi disposto em apenas um nodo do \textit{cluster}, de maneira \textit{standalone}. O nodo ZooKeeper armazena, em memória, as estruturas dos \textit{znodes} utilizados para implementação do Gerenciamento Dinâmico. Assim, quando uma notificação a um determinado \textit{Worker} deve ser enviada, essas estruturas são manipuladas.
+
+O \textit{Agente Observador} consiste em uma aplicação Java, responsável por realizar a conexão na API do Spark e efetuar o consumo dos dados, permitindo que sejam obtidas informações relativas ao estado atual das aplicações em execução. Por padrão, para cada \textit{Job}, são coletadas informações sobre o consumo de Memória de Armazenamento e de Execução, os estágios disponíveis juntamente com seus respectivos \textit{status} e a fração armazenada em memória do RDD em \textit{cache}.
+
+A partir das informações coletadas, o \textit{Agente} busca estimar o melhor momento para realizar a liberação de memória no Spark. Para tanto, duas métricas são adotadas: o \textit{threshold} de ocupação de memória e o número de estágios pendentes.
+
+O \textit{threshold} visa definir um limite máximo para a ocupação da memória, inferior a 100\%, de modo a manter uma determinada quantidade de memória livre. Assim, em situações onde novos dados devem ser armazenados em memória ou a Memória de Execução necessita de espaço extra para continuar a execução da \textit{task}, evita-se a necessidade de interromper a execução da aplicação para realizar a remoção do espaço requerido. 
+
+Durante a execução da aplicação, caso o limite de ocupação da memória seja ultrapassado, pode haver a necessidade de remover blocos da memória. A remoção de dados é feita a fim de garantir uma fração da Memória de Armazenamento sempre disponível para a aplicação.
+
+Uma segunda métrica utilizada consiste no \textit{status} dos estágios criados para o processamento do \textit{job} da aplicação. Em situações onde o \textit{threshold} foi atingido e foram identificados estágios pendentes para serem executados, partições devem ser removidas da memória a fim de liberar espaço.
+
+Em contraponto, se a ocupação da memória atingir o limiar e não houver estágios pendentes, nenhuma ação é tomada. Deste modo, permite-se que a memória seja completamente ocupada, uma vez que não é possível identificar de forma antecipada se a execução de um novo \textit{job} será realizada.
+
+Uma vez decididas quais partições devem ser removidas da memória, o Agente de Monitoramento deve realizar a notificação aos Spark \textit{Workers} para que estes iniciem as rotinas de remoção de blocos da memória. Para tanto, o Agente calcula, de forma individual, a quantidade de memória que cada \textit{Executor} deve liberar para ficar abaixo do \textit{threshold} estabelecido. Na sequência, o Agente escreve esta informação no \textit{znode} associado ao respectivo \textit{Executor}. 
+
+
+\subsection{Implementação do Gerenciamento Dinâmico}
+O desenvolvimento do modelo de Gerenciamento Dinâmico foi divido em três etapas de implementação: Algoritmo de gerenciamento de memória no Spark, Comunicação entre o Spark e o ZooKeeper e Agente de Monitoramento para instrumentação da aplicação.
+
+\subsubsection{Algoritmo de Gerenciamento de Memória}
+O algoritmo utilizado no modelo de Gerenciamento Dinâmico consiste em uma otimização do algoritmo LRU implementado nativamente pelo Spark. Este algoritmo une a localidade temporal do LRU juntamente com a Frequência de Reutilização dos RDDs para definir a ordem em que as partições serão removidas da memória. Uma vez que este algoritmo necessita de informações providas pela aplicação, torna-se necessário analisar a aplicação antes de efetivamente executá-la.
+
+A extração das informações requeridas pelo algoritmo é realizada modificando o escalonador de \textit{jobs} do Spark, isto é, o \textit{DAGScheduler}. Após uma ação ser aplicada ao RDD, este é submetido ao escalonador do Spark para que seu plano de execução seja gerado, possibilitando a execução do \textit{job} no \textit{cluster}. Entretanto, antes de iniciar a execução das \textit{tasks} do \textit{job}, dois métodos são executados: \textit{getLineageGraphFromJob} e \textit{getRddsReuseFrequency}.
+
+O método \textit{getLineageGraphFromJob}, exibido no Algoritmo \ref{fig:metodo-getLineageGraph}, é responsável por obter o grafo de dependências do \textit{job} a ser executado. Para isto, primeiro o RDD é adicionado na lista de nodos já computados (Linha 4), a fim de evitar que este RDD seja processado mais de uma vez. Em seguida, é gerada uma lista contendo todos os identificadores das dependências desse RDD (Linhas 5--8). Por fim, é realizado o mapeamento deste RDD junto com sua lista de dependências (Linha 9). Este procedimento é repetido para todas as dependências ainda não processadas do RDD (Linhas 10--14). Ao final deste método, a estrutura \textit{lineage} (Linha 2) armazenará os \textit{ids} dos RDDs juntamente com suas respectivas listas de dependências.
+
+
+% \begin{figure}[!ht]
+%     \caption{Método para Obtenção do Grafo de Dependências do \textit{Job}.}
+%     \begin{center}
+%         \includegraphics[scale=1.20]{imagens/metodo-getLineageGraph.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:metodo-getLineageGraph}
+% \end{figure}
+
+% [corrigido]
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+    \label{fig:metodo-getLineageGraph}
+    \caption{Obtenção do Grafo de Dependências do \textit{Job}.}
+        \Saida{Estrutura HashMap contendo os RDDs manipulados no \textit{job}.}
+        
+        \BlankLine
+        visited $\leftarrow$ List[RDD]\;
+        lineage $\leftarrow$ HashMap[Int, List[Int]]\;
+        
+        \BlankLine
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{getLineageGraphFromJob(init: RDD[\_])} {
+           add(init, visited)\;
+           
+           \BlankLine
+           rddDependencies $\leftarrow$ List[Int]\;
+           \ForEach{dep in init.dependencies} {
+                add(dep.id, rddDependencies)\;
+           }
+           
+           \BlankLine
+           add([init.id, rddDependencies], lineage)\;
+           \ForEach{dep in init.dependencies} {
+                \If{dep $\notin$ visited} {
+                    getLineageGraphFromJob(dep)\;
+                }
+           }
+        }
+    \end{algorithm}
+\end{figure}
+
+
+Após a obtenção do grafo de dependência, um segundo método é executado, visando gerar a frequência de reutilização de cada RDD mapeado. Esse método, denominado \textit{getRddsReuseFrequency}, é apresentado no Algoritmo \ref{fig:metodo-getReuseFrequency}. O objetivo do método  \textit{getRddsReuseFrequency} é acessar os RDDs identificados no \textit{job} (Linhas 2--12), acessando a lista de dependências de cada RDD (Linha 3). Em seguida, percorre-se a lista de dependências do RDD (Linhas 4--10), contabilizando a frequência em que cada RDD aparece na lista de dependências (Linhas 5--9). Deste modo, gera-se um mapa onde a chave consiste no identificador do RDD e o valor na Frequência de Reutilização.
+
+% \begin{figure}[!ht]
+%     \caption{Método para Obtenção da Frequência de Reutilização do RDD.}
+%     \begin{center}
+%         \includegraphics[scale=1.20]{imagens/metodo-getReuseFrequency.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:metodo-getReuseFrequency}
+% \end{figure}
+
+% [corrigido]
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+    \caption{Método para Obtenção da Frequência de Reutilização do RDD.}
+        \label{fig:metodo-getReuseFrequency}
+            \Entrada{lineage $\leftarrow$ HashMap[Int, List[RDD]] com o grafo de dependências}
+            \Saida{reuseFrequency $\leftarrow$ HashMap[Int, Int] com a frequência de reutilização de cada RDD}
+            
+            \SetKwProg{Fn}{Function}{}{end}
+            \BlankLine
+            \Fn{getRddsReuseFrequency()}{
+                \ForEach{rdd in lineage}{
+                    dependencies $\leftarrow$ rdd.dependencies\;
+                    \ForEach{deps in dependencies}{
+                        \uIf{deps $\in$ dependencies}{
+                            updateValue(deps, reuseFrequency, +1)\;
+                        }
+                        \Else{
+                            add(deps, reuseFrequency)\;
+                        }
+                    }
+                }
+            }
+    \end{algorithm}
+\end{figure}
+
+Uma vez realizado o processamento dos métodos \textit{getLineageGraphFromJob} e \textit{getRddsReuseFrequency}, o resultado gerado é mantido no \textit{Driver}, estando disponível para os \textit{Executors} da aplicação. O armazenamento dessas informações é feito através de um objeto do tipo  \textit{ShouldBeInCache}. A definição desta classe é ilustrada no Algoritmo \ref{fig:classe-shouldbeincache}, demonstrando seus principais métodos.
+
+% \begin{figure}[!ht]
+%     \caption{Armazenamento das Informações Processadas.}
+%     \begin{center}
+%         \includegraphics[scale=1.20]{imagens/classe-shouldbeincache.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:classe-shouldbeincache}
+% \end{figure}
+
+% [corrigido]
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+    \caption{Armazenamento das Informações Processadas.}
+        \label{fig:classe-shouldbeincache}
+            \SetKwProg{Fn}{Function}{}{end}
+            \SetKwProg{Cs}{Class}{}{end}
+            
+            \Cs{ShouldBeInCache:} {
+                rddList $\leftarrow$ HashMap[Int, Int]\; 
+                
+                \Fn{insertElemet(id: Int, score: Int)}{
+                    add([id, score], rddList)\;
+                }
+                
+                \BlankLine
+                \Fn{contains(id: Int)}{
+                    \textbf{return} id $\in$ rddList\;
+                }
+                
+                \BlankLine
+                \Fn{getReuseFrequency(id: Int)}{
+                    \textbf{return} rddList[id]\;
+                }
+            }
+    \end{algorithm}
+\end{figure}
+
+Conforme exibe o Algoritmo \ref{fig:classe-shouldbeincache}, a classe \textit{ShouldBeInCache} é responsável pelo armazenamento das informações obtidas do \textit{job}. O armazenamento dessas informações é realizado utilizando uma estrutura de \textit{HashMap} contendo identificador de RDD a uma respectiva Frequência de Reutilização (Linha 2). A inserção de dados é realizada através do método \textit{insertElement} (Linhas 3--5), a qual recebe o identificador do RDD e seu respectivo peso e adiciona ao \textit{HashMap} (Linha 4). O método \textit{contains} (Linhas 6--8) verifica se um RDD cujo identificador foi passada como parâmetro está armazenado no \textit{HashMap}. Por fim, o método \textit{getReuseFrequency} (Linhas 9--11) visa obter a Frequência de Reutilização de um RDD do RDD com identificador informado parâmetro. Se o identificar não for encontrado, esse método retorna 1. Isso ocorre para tratar os casos onde tenta-se verificar a Frequência de Reutilização de uma partição a qual não pertence a um RDD.
+
+A definição da classe \textit{ShouldBeInCache} deve estender duas interfaces: \textit{Serializable} e \textit{Loggin}. A interface \textit{Serializable} visa permitir a transmissão de uma instância desse objeto através de chamadas RPC (\textit{Remote Procedure Call}), sendo este o método utilizado para realizar a comunicação entre nodos do Spark. A interface \textit{Logging} possibilita que sejam inseridas mensagens nos \textit{logs} de execução do Spark.
+
+Após o processamento dos métodos implementados, a execução do \textit{job} é realizada sem quaisquer alterações. Deste modo, o Spark divide os estágios em \textit{tasks} e as executa nos \textit{Executors}. Durante a realização das computações requeridas pelos estágios, a memória pode ser esgotada e blocos de dados devem ser removidos da memória a fim de completar sua execução. 
+
+A rotina de remoção de partições da memória deve priorizar a manutenção de blocos com a maior Frequência de Reutilização postergando, quando possível, a remoção destes blocos. Assim, primeiro deve-se remover blocos com menor Frequência de Reutilização e, para tanto, ordena-se os blocos mantidos em memória utilizando esta métrica. 
+
+Para realizar a ordenação dos blocos de memória é necessário obter a lista atualizada das Frequências de Reutilização de cada RDD manipulado no \textit{job}. A fim de obter esta lista, o Spark \textit{Executor} envia uma solicitação ao \textit{Driver} da aplicação, requerendo a lista contendo as Frequências de Reutilização extraídas através do \textit{DAGScheduler}. Essa solicitação é enviada sempre que, durante a rotina de remoção de dados da memória, um RDD não for encontrado na lista armazenada pelo \textit{Executor}.
+
+O cenário descrito indica que um novo \textit{job} foi iniciado e, portanto, a lista com a frequência de reutilização deve ser atualizada. Durante a atualização desta lista, a execução da rotina de remoção de blocos da memória é bloqueada até que o \textit{Executor} receba a resposta da chamada RPC realizada ao \textit{Driver}, garantindo o sincronismo da comunicação. Este sincronismo faz-se necessário, uma vez que as informações relativas a Frequência de Reutilização dos RDDs são indispensáveis para o prosseguimento da execução da rotina de remoção de partições da memória. Como consequência dessa comunicação síncrona, a execução da \textit{task} da aplicação é bloqueada até a conclusão da rotina de remoção de dados da memória.
+
+Porém, a classe responsável por abrigar os métodos de gerenciamento de memória do Spark, denominada \textit{MemoryStore}, não tem acesso ao ambiente encarregado pela comunicação entre os nodos do \textit{cluster}. O acesso ao ambiente RPC pode ser realizado através do \textit{BlockManager}, responsável pelo armazenamento local e remoto de blocos de dados. 
+
+Para possibilitar que os métodos de gerenciamento de memória tenham acesso ao ambiente de comunicação RPC, transmite-se uma referência do \textit{BlockManager} ao \textit{MemoryStore} após a sua criação, através de um método \textit{set} criado no \textit{MemoryStore}. Deste modo, as rotinas de gerenciamento de memória passam a ter acesso ao ambiente de comunicação e, consequentemente, torna-se possível realizar chamadas remotas diretamente destas rotinas. 
+
+Assim, quando houver a necessidade de realizar a remoção de blocos de memória, realiza-se uma chamada direta ao \textit{Driver}, partindo do \textit{MemoryStore}, a fim de requerer a lista de Frequência de Reutilização obtida durante a análise do \textit{job}, visando ordenar as partições armazenadas de acordo com sua respectiva Frequência e Reutilização.
+
+\subsubsection{Comunicação e Notificação Utilizando o ZooKeeper}
+A implementação do algoritmo de gerenciamento de partições da memória garante que, em situações onde a memória contra-se sobrecarregada, as partições que a serem removidas são aquelas com a menor frequência de reutilização. Entretanto, este algoritmo funciona de maneira reativa, isto é, será executada apenas quando não houver mais espaço disponível. 
+
+A fim de implementar o modelo de Gerenciamento Dinâmico, o qual permite que partições sejam removidas antes que o espaço disponível para armazenamento de dados esteja completamente esgotado, é necessário que haja uma comunicação entre o Spark e o Agente de Monitoramento. Para tanto, após a implementação do algoritmo responsável por gerir o espaço disponível, o próximo passo consiste em implementar a comunicação entre os \textit{Executors} do Spark e o ZooKeeper. 
+
+A implementação desta comunicação utiliza a API Java oferecida nativamente pelo ZooKeeper, expondo os métodos necessários para criar e gerencias conexões. Entretanto, para a realizar a conexão junto ao ZooKeeper, duas informações são obrigatoriamente necessárias: 
+\begin{enumerate}
+    \item[a)] identificador do \textit{Executor} para criação do seu respectivo \textit{znode} na árvore em memória oferecida pelo  ZooKeeper; e
+    \item[b)] endereço de IP do nodo \textit{Master} do ZooKeeper. 
+\end{enumerate}
+
+O identificador do \textit{Executor} pode ser obtido por meio do \textit{BlockManager}, através do mesmo objeto utilizado para realizar chamadas RPC na \textit{MemoryStore}. Este identificador é um inteiro de valor único no \textit{cluster}, sendo utilizado para registrar o \textit{Executor} junto ao \textit{Driver} da aplicação para que seja possível executar \textit{tasks} das aplicações Spark.
+
+O endereço do IP do nodo \textit{Master} do ZooKeeper é obtido manipulando o arquivo de configuração do Spark. Para tanto, adiciona-se a propriedade \textit{spark.zookeeper.master.url} como chave e o IP do nodo \textit{Master} como valor no arquivo utilizado para submeter as configurações da aplicação. Embora a propriedade seja relacionada ao ZooKeeper, é importante que esta inicie com o prefixo \textit{spark.} uma vez que o Spark implementa filtros para a carga do arquivo de configuração, descartando e invalidando todas as configurações as quais não iniciem utilizando tal prefixo. Assim, quando o \textit{framework} é inicializado, este carrega o arquivo de configurações de modo a permitir que todos os \textit{Executors} do Spark passem a ter acesso às configurações realizadas durante a submissão da aplicação.
+
+Especificamente, a conexão junto ao ZooKeeper é realizada durante a inicialização do \textit{MemoryStore}. Neste ponto, o Spark inicializa as variáveis e métodos responsáveis pelo controle da memória consumida. A seguir, o Spark executa a rotina de conexão do \textit{Executor} junto ao nodo \textit{Master} do ZooKeeper, exibida no Algoritmo \ref{fig:conexao-zookeeper}, na qual os tratamentos de erros e métodos auxiliares foram suprimidos. A partir da conexão criada por cada \textit{Executor}, é possível monitorar estes \textit{Executors} de forma individual e realizar a notificação para a remoção de blocos da memória da memória, quando necessário.
+
+% \begin{figure}[!ht]
+%     \caption{Gerenciamento da Conexão com o ZooKeeper.}
+%     \begin{center}
+%         \includegraphics[scale=1.05]{imagens/conexao-zookeeper.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:conexao-zookeeper}
+% \end{figure}
+
+% [corrigido]
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+    \caption{Gerenciamento da Conexão com o ZooKeeper.}
+        \label{fig:conexao-zookeeper}
+            \KwData{\\
+                dm $\leftarrow$ objeto o qual implementa o método \textit{process} do ZooKeeper para tratamento dos eventos\;
+                Spark\_Executor\_id $\leftarrow$ identificador único do Executor do Spark\;
+            }
+    
+            \SetKwProg{Fn}{Function}{}{end}
+            \SetKwProg{Cs}{Class}{}{end}
+            
+            \Cs{ZookeeperConnection:} {
+                zk $\leftarrow$ new ZooKeeper(Zk\_IP, timeout, dm)\; 
+                
+                \Fn{watchZnode()}{
+                    myPath $\leftarrow$ getMyPath(Spark\_Executor\_id)\;
+                    zk.exists(myPath, dm)\;
+                }
+                
+                \BlankLine
+                \Fn{createZnode()}{
+                    myPath $\leftarrow$ getMyPath(Spark\_Executor\_id)\;
+                    stat $\leftarrow$ zk.exists(myPath, dm)\;
+                    
+                    \If{$\nexists$ stat} {
+                        zk.create(myPath, emptyData, ZooDefs.Ids.OPEN\_ACL\_UNSAFE, CreateMode. PERSISTENT)\;
+                    }
+                }
+            }
+    \end{algorithm}
+\end{figure}
+
+
+Conforme apresentado pelo Algoritmo \ref{fig:conexao-zookeeper}, a conexão do cliente junto ao ZooKeeper é gerenciada pela classe \textit{ZookeeperConnection}, implementada em Java. Esta classe recebe como parâmetros o identificador do \textit{Executor} onde está hospedada, a referência ao objeto \textit{MemoryStore} e a URL (\textit{Uniform Resource Location}) do nodo \textit{Master} do ZooKeeper. 
+
+Durante a criação de um objeto desta classe, primeiro é realizada a inicialização do \textit{DataMonitor}, cujo objetivo é tratar os eventos gerados pelo ZooKeeper. A seguir, é salvo o identificador na classe e inicializada a conexão com o ZooKeeper (Linha 2), utilizando o endereço do nodo \textit{Master}, um \textit{timeout} e o objeto para tratamento dos eventos, isto é, o \textit{DataMonitor}.
+
+Na sequência, cria-se o \textit{znode} responsável por representar o \textit{Executor} dentro da árvore \textit{in memory} do ZooKeeper, utilizando a função \textit{createZnode()} (Linhas 7--12). O caminho deste nodo é formado pelo prefixo \textit{/Spark/} seguido do seu identificador único, obtido através do \textit{BlockManager}. Uma representação visual desta estrutura é exibida na Figura \ref{fig:estrutura-utilizada-zookeeper}, apresentando a árvore de \textit{znodes} criada após a inicialização do \textit{cluster} Spark.
+
+Por fim, registra-se o cliente do ZooKeeper utilizando a função \textit{watchZnode()}(Linhas 3--6), a fim de viabilizar o recebimento de notificações de eventos ocorridos na árvore de \textit{znodes}. Esse registro é efetuado apenas verificando a existência do nodo desejado. Após a ocorrência de um evento, o ZooKeeper irá informar todos os objetos registrados para realizar o tratamento da notificação.
+ 
+\begin{figure}[!ht]
+    \caption{Árvore de \textit{znodes} Criados pela Gerenciamento Dinâmico.}
+    \begin{center}
+        \includegraphics[scale=0.8]{imagens/estrutura-utilizada-zookeeper.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:estrutura-utilizada-zookeeper}
+\end{figure}
+
+Quando uma modificação ocorre em um \textit{znode}, todos os clientes são notificados pelo ZooKeeper, sendo repassado o caminho do nodo responsável pelo disparo do evento. Cabe a cada um dos clientes verificar se o nodo é de seu interesse e, caso seja necessário, realizar a remoção de dados da memória. A implementação do tratamento dos eventos recebidos pelo ZooKeeper é realizada através da função  demonstrada no Algoritmo \ref{fig:data-monitor-spark}. 
+
+O Algoritmo \ref{fig:data-monitor-spark} implementa o método \textit{process}, de modo que este  seja sobrescrito a fim de implementar a lógica necessária para tratamento dos eventos disparados. Este método é exposto pela interface \textit{Watcher} provida pelo ZooKeeper. Desse modo, o ZooKeeper consegue notificar os clientes através de chamadas ao método \textit{process} de cada cliente conectado.
+
+% \begin{figure}[!ht]
+%     \caption{Tratamento de Eventos Recebidos.}
+%     \begin{center}
+%         \includegraphics[scale=1]{imagens/data-monitor-spark.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:data-monitor-spark}
+% \end{figure}
+
+\begin{figure}[!ht]
+    \begin{algorithm}[H]
+    \caption{Tratamento de Eventos Recebidos.}
+        \label{fig:data-monitor-spark}
+        \KwData{\\
+            zooConnection $\leftarrow$ Conexão com o Zookeeper\;
+            memoryStore $\leftarrow$ Objeto responsável pelo gerenciamento da memória do Spark\;
+        }
+        
+        \BlankLine
+        \emph{WatchedEvent é a classe de evento implementada pelo Zookeeper.}\\
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{process(event: WatchedEvent)}{
+            eventPath $\leftarrow$ event.getPath()\;
+            myPath $\leftarrow$ getMyZonePath()\;
+            
+            \If{eventPath == myPath}{
+                znodeData $\leftarrow$ zooConnection.getData()\;
+                requiredBytes = Long(znodeData)\;
+                memoryStore.evictBlocks(requiredBytes)\;
+            }
+            
+            zooConnection.watchZnode()\;
+        }
+    \end{algorithm}
+\end{figure}
+
+Através do método \textit{process}, exibdo no Algoritmo \ref{fig:data-monitor-spark}, o \textit{Executor} recebe a notificação de uma mudança ocorrida nos dados associados às estruturas dos \textit{znodes}. A seguir, verifica-se em qual nodo ocorreu o evento (Linha 3). Caso o evento tenha ocorrido no \textit{znode} de interesse do \textit{Executor}, isto é, no nodo associado ao seu identificador único (Linhas 4 -- 5), deve-se remover blocos da memória. Essa remoção é realizada obtendo a quantidade de espaço que deve ser liberado, calculada e escrita pelo Agente de Monitoramento (Linhas 6--8). Ao final deve-se observar o znode de interesse, a fim de receber novas notificações relacionadas a alteração dos znodes mantidos pelo ZooKeeper (Linha 10).
+
+\subsubsection{Agente de Monitoramento}
+A última etapa para implementação do Gerenciamento Dinâmico refere-se ao desenvolvimento do Agente de Monitoramento, o qual permite a instrumentação da execução de aplicações Spark. Este agente tem como função determinar se dado o contexto da aplicação, isto é, \textit{status} de execução da aplicação e consumo de memória dos \textit{Executors}, deve-se ou não, remover partições da memória de forma antecipada.  
+
+O Agente de Monitoramento consiste em uma aplicação desenvolvida na linguagem Java, com o objetivo de obter dados do Spark via API REST, de modo a prever a necessidade de liberação de espaço em memória no Spark durante a execução de aplicações. O agente é construído utilizando a API oficial do ZooKeeper para realizar a manipulação dos \textit{znodes} e, dessa forma, realizar a comunicação entre o Agente e os \textit{Executors} do Spark. 
+
+A aplicação divide-se em três pacotes: \textit{Models}, \textit{Network} e \textit{Monitor}. A Figura \ref{fig:diagrama-pacotes} apresenta o Diagrama de Pacotes com as definições das classes as quais compõem cada pacote.
+
+\begin{figure}[!ht]
+    \caption{Diagrama de Pacotes do Agente de Monitoramento.}
+    \begin{center}
+        \includegraphics[scale=0.78]{imagens/diagrama-classe-v2.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:diagrama-pacotes}
+\end{figure}
+
+O pacote \textit{Models} oferece classes para encapsular as principais métricas obtidas através do Spark. Para tanto, agrupa-se os dados de interesse e são oferecidos métodos para melhorar a visualização dos dados coletados. Dessa forma, torna-se mais fácil a manipulação e o tratamento destas informações. Neste pacote encontram-se duas classes: \textit{MemoryMetrics} e \textit{RDDsMetrics}. 
+
+A classe \textit{MemoryMetrics} armazena dados sobre o consumo de memória dos \textit{Executors} utilizados no processamento da aplicação. Assim, são armazenados o identificador do \textit{Executor}, o total de Memória de Armazenamento disponível e a quantidade de Memória de Armazenamento ocupada. Além disso, nesta classe são implementados os seguintes métodos:
+\begin{enumerate}
+    \item[a)] \textit{percentUsedOnHeap}: calcula a fração, em termos percentuais, do espaço consumido da Memória de Armazenamento;
+    \item[b)] \textit{getOnHeapStorageMemoryUsed}: retorna o total, em \textit{bytes}, de Memória de Armazenamento utilizada pela aplicação;
+    \item[c)] \textit{getTotalOnHeapStorageMemory}: retorna o total, em \textit{bytes}, de Memória de Armazenamento disponível para a aplicação;
+    \item[d)] \textit{calculateEvictSpace(int)}: calula a quantidade de memória que deve ser removida do \textit{Executor}, baseando-se no \textit{threshold} passado por parâmetro para o método.
+\end{enumerate}
+
+Na classe \textit{RDDsMetrics} são armazenadas as informações relativas aos RDDs mantidos em \textit{cache}. Para tal, mantém-se o identificador do RDD, o número total de partições deste RDD e o número de partições armazenadas em memória. Além dos atributos responsáveis por armazenar as informações coletadas, esta classe implementa o método \textit{getCachedFraction}, responsável por calcular o percentual de partições mantidas em \textit{cache}.
+
+O pacote \textit{Network} concentra as classes responsáveis pelo gerenciamento das conexões realizadas pela aplicação junto ao Spark e ao ZooKeeper. O gerenciamento destas conexões é feito através das classes \textit{SparkEndpoints}, \textit{SparkApiRequest} e \textit{ZookeeperConnection}.
+
+Na classe \textit{SparkEnpoints}, encontram-se os métodos responsáveis por abstrair os \textit{Endpoints}, isto é, as URLs para acesso as informações do Spark. Para isto, esta classe formata as URLs corretamente com o identificador da aplicação e do \textit{job}, quando necessário, de modo a possibilitar que sejam utilizadas para realizar as requisições na API REST do Spark. 
+
+
+A classe \textit{SparkApiRequest} tem como objetivo realizar as requisições através da API REST do Spark e obter informações sobre a aplicação, sendo estas requisições realizadas utilizando os \textit{endpoints} abstraídos pela classe \textit{SparkEndpoints}. Todo o tratamento dessas requisições é realizado por este componente, disponibilizando métodos para obter as informações necessárias para realizar o monitoramento da aplicação. Assim, os métodos disponibilizados por esta classe são:
+
+\begin{enumerate}
+    \item[a)] \textit{fetchDataFromEndpoint}: acessa o \textit{endpoint} recebido por parâmetro e retorna a resposta obtida. Retorna null em caso de falha;
+    \item[b)] \textit{parseDataReceived}: decodifica o arquivo JSON recebido como resposta da requisição ao \textit{endpoint};
+    \item[c)] \textit{getApplicationsId}: utiliza o \textit{endpoint /application} e retorna uma lista com todas as aplicações em execução;
+    \item[d)] \textit{getJobsRunning}: acessa o \textit{endpoint /applications/{[}app-id{]}/jobs} e retorna os \textit{jobs} em execução da aplicação cujo identificador foi recebido como parâmetro;
+    \item[e)] \textit{getJobInfo}: retorna os estágios que serão utilizados
+    para processar o \textit{job}, obtidos através do \textit{endpoint /applications/{[}app-id{]}/jobs/{[}jib-id{]}};
+    \item[f)] \textit{getStagesFromJob}: utiliza o \textit{endpoint /applications/{[}app-id{]}/stages} e retorna os estágios com seus respectivos status da aplicação informada no parâmetro;
+    \item[g)] \textit{getExecutorsState}: Utiliza o \textit{endpoint /applications/{[}app-id{]}/executors} para coletar os dados relativos ao consumo de memória dos \textit{Executors} ativos na aplicação cujo identificador foi recebido por parâmetro;
+    \item[h)] \textit{getStorageRDDs}: Através do \textit{endpoint /applications/{[}app-id{]}/storage/rdd}, obtém os RDDs mantidos em cache pela aplicação cujo identificador foi passado por parâmetro.
+\end{enumerate}
+
+A última classe contida no pacote \textit{Network} é a \textit{ZookeeperConnection}, a qual tem como objetivo gerenciar a conexão do Agente de Monitoramento com o nodo \textit{Master} do ZooKeeper. Os métodos oferecidos por essa classe visam abstrair a utilização da API do ZooKeeper de modo a facilitar a comunicação entre o agente e o ZooKeeper, possibilitando que seja realizada a notificação dos \textit{Executors}. Para isto, esta classe oferece os métodos:
+
+\begin{enumerate}
+    \item[a)] \textit{open}: cria uma nova conexão com o nodo \textit{Master} do ZooKeeper, permitindo acesso à árvore de \textit{znodes};
+    \item[b)] \textit{existsZNode}: recebe como parâmetro uma string contendo o caminho do \textit{znode} o qual deseja verificar sua existência, retornando um objeto do ZooKeeper, do tipo \textit{Stat}, para indicar o \textit{status} do \textit{znode}.
+    desse \textit{znode};
+    \item[c)] \textit{setZNodeData}: recebe como parâmetro uma string com o caminho do \textit{znode} e um \textit{array} de \textit{bytes} com os dados que devem ser escritos no \textit{znode}. Retorna \textit{true} caso a operação tenha sido realizada com sucesso e \textit{false} em caso de falha ou inexistência do \textit{znode}.
+\end{enumerate}
+
+No pacote \textit{Monitor} encontra-se a classe \textit{Observer}, a qual contém a lógica principal para o monitoramento da aplicação. Para tanto, esta classe obtém as informações relacionadas à aplicação utilizando as classes implementadas nos pacotes \textit{Models} e \textit{Network}. A partir das informações, o Agente de Monitoramento decide se partições de RDDs devem ser removidas da memória. Para tanto, nesta classe são implementados os métodos:
+
+\begin{enumerate}
+    \item[a)] \textit{waitFor}: interrompe a execução da \textit{thread} por um determinado tempo, definido pelo parâmetro do método; 
+    \item[b)] \textit{getApplications}: obtém as aplicações em execução. Esta função é executada até que seja encontrada, pelo menos, uma aplicação ativa no Spark;  
+    \item[c)] \textit{notifyZNode}: calcula o espaço de memória que deve ser liberado e notifica o \textit{Executor} recebido por parâmetro;
+    \item[d)] \textit{createZNodePath}: recebe uma string com o identificador do \textit{Executor} e retorna seu caminho na árvore de \textit{znodes};
+    \item[e)] \textit{shouldEvictBlocks}: método responsável por determinar se partições de RDDs devem ser removidas da memória, baseando-se nas características do ambiente atual de execução;
+    \item[f)] \textit{run}: função que executa a \textit{thread} principal de monitoramento do agente.
+\end{enumerate}
+
+
+
+A implementação do monitoramento é realizada em uma \textit{thread} separada, independente da \textit{thread} principal. Assim, é possível enviar comandos para o Agente de Monitoramento e, deste modo, acompanhar o percentual dos RDDs mantidos em \textit{cache}. Uma visão geral do fluxo de execução da \textit{thread} de  monitoramento é ilustrada pelo Algoritmo \ref{fig:thread-monitor}.
+
+% \begin{figure}[!ht]
+%     \caption{\textit{Thread} de Monitoramento da Aplicação.}
+%     \begin{center}
+%         \includegraphics[scale=1]{imagens/thread-monitor-v2.pdf}
+%     \end{center}
+%     \small{Fonte: Próprio autor}
+%     \label{fig:thread-monitor}
+% \end{figure}
+
+% [corrigido]
+\begin{figure}[!ht] 
+    \begin{algorithm}[H]
+    \caption{\textit{Thread} de Monitoramento da Aplicação.}
+        \label{fig:thread-monitor}
+        \KwData{\\
+            api $\leftarrow$ Conexão com o Zookeeper\;
+            monitorCheckTime $\leftarrow$ Periodicidade do monitoramento\;
+        }
+        \SetKwProg{Fn}{Function}{}{end}
+        \Fn{run()}{
+            api $\leftarrow$ openZookeeperConnection()\;
+            \While{True}{
+                apps $\leftarrow$ getApplications()\;
+                \While{True}{
+                    jobsRunning $\leftarrow$ api.getJobsRunning()\;
+                    stageStatus $\leftarrow$ api.getStageStatus(jobsRunning)\;
+                    memoryMetrics $\leftarrow$ api.getMemoryMetrics(jobsRunning)\;
+                    rddsCached $\leftarrow$ api.getRddsCached(jobsRunning)\;
+                    
+                    \BlankLine
+                    \If{ocorreu erro na obtenção dos dados da api}{
+                        break\;
+                    }
+                    
+                    \BlankLine
+                    shouldEvictBlocks(stageStatus, memoryMetrics)\;
+                    waitFor(monitorCheckTime)\;
+                }
+            }
+        }
+    \end{algorithm}
+\end{figure}
+
+De acordo com o Algoritmo \ref{fig:thread-monitor}, para implementar a \textit{thread} de monitoramento, primeiro é inicializada a conexão entre o Agente de Monitoramento e o ZooKeeper (Linha 2). Um vez estabelecida a conexão, o monitoramento é realizado utilizando dois laços aninhados. O laço externo (Linhas 3--16) obtém as aplicações em execução no Spark através do método \textit{getApplications} (Linha 4). Este método é implementado para que seja possível obter os identificadores das aplicações em execução. Assim, garante-se a existência do identificador da aplicação para futuras requisições.
+
+No laço interno (Linhas 5--15) são executadas as rotinas para coleta das métricas da aplicação implementadas pela classe \textit{SparkApiRequest} do pacote \textit{Network}. Primeiro, o agente obtém os \textit{jobs} da aplicação em execução (Linha 6). A seguir, coleta-se os estágios deste \textit{job} (Linha 7), juntamente com seus respectivos \textit{status}. Um estágio pode ter os seguintes \textit{status}: \textit{pending}, quando encontra-se pendente para execução; \textit{running} quando está em execução e \textit{completed} quando sua execução já foi realizada.
+
+Na sequência, são reunidas as informações sobre os \textit{Executors} ativos na execução da aplicação (Linha 8). Nesta etapa, são extraídos os identificadores dos \textit{Executors} e as informações relativas ao consumo de memória. O identificador obtido nesta requisição é o mesmo utilizado para criar seu respectivo \textit{znode} no Zookeper. Desta forma, é possível notificar individualmente cada \textit{Executor}. A última requisição consiste na coleta das informações dos RDDs mantidos em \textit{cache} pela aplicação (Linha 9). A partir desta informação é possível determinar quais RDDs estão sendo mantidos em memória pela aplicação.
+
+Após a execução de cada método utilizado para realizar o monitoramento (Linhas 6, 7, 8 e 9), deve-se verificar se o retorno dos método executado é igual a \textit{null}. Esta verificação é necessária para garantir que os dados foram corretamente obtidos (Linhas 10--12). Caso o retorno seja \textit{null}, a aplicação Spark finalizou sua execução durante o processamento do \textit{loop} interno (Linhas 5--15) e este deve ser finalizado através do comando \textit{break}. Na sequência, o laço externo (Linhas 3--16) volta a ser executado, obtendo novamente as aplicações em execução, já que o identificador da aplicação mudou pois trata-se de uma nova aplicação em execução.
+
+Uma vez coletadas as métricas, o próximo passo consiste em verificar se há a necessidade de remover blocos da memória. Para isso, o método \textit{shouldEvictBlocks} (Linha 13) verifica os estágios do \textit{job}, bem como o consumo de memória dos \textit{Executors} da aplicação. Caso haja estágios pendentes para execução e o percentual de ocupação da memória esteja acima de um \textit{threshold} pré-estabelecido, uma notificação é enviada ao \textit{Executor} indicando que este deve remover partições de RDDs da memória. 
+O \textit{threshold} é um limiar máximo para ocupação da memória utilizada pelo Spark, com valor inferior a 100\%. Por padrão, o Agente de Monitoramento adota um limiar de ocupação máximo de 95\%. Entretanto, o usuário pode configurar este valor no momento da inicialização do agente. 
+
+Para realizar a notificação do \textit{Executor} cuja ocupação da memória excedeu o \textit{threshold} máximo, o Agente de Monitoramento calcula a quantidade de memória, em \textit{bytes}, acima do \textit{threshold} e escreve este valor no \textit{znode} correspondente ao \textit{Executor} modificando-o. Esta alteração é detectada pelo ZooKeeper, o qual envia uma notificação para todos os clientes conectados. O \textit{Executor} recebe esta informação contendo o espaço de memória que deve ser liberado e executa a remoção dos blocos de memória. A remoção de partições é realizada até que o espaço liberado pelo \textit{Executor} seja maior ou igual ao requisitado pelo Agente de Monitoramento.
+
+% [corrigido: nao, porque não fiz a coleta de dados em diferentes tempos para a periodicidade do monitoramento. Nos experimentos, constatei que com 2s em diante, o spark removia dados por conta e depois chegava uma notificacao (atrasada) do monitoramento] | Comentario: Fez essa análise? Poderia colocar? Qual é o impacto real de sobrecarga para diferentes intervalos? 
+Uma iteração do laço interno (Linhas 5--15) é finalizada aguardando um tempo pré-estabelecido, até que a próxima iteração deste mesmo laço execute e toda a computação seja realizada novamente. Por padrão, realiza-se uma iteração por segundo, de modo a acompanhar constantemente a evolução da ocupação da memória. Intervalos de tempo superiores tendem a deixar a memória sobrecarregada, induzindo o Spark a gerenciar a memória de forma reativa. Assim como o \textit{threshold}, a periodicidade com que o laço será executado pode alterada pelo usuário através dos parâmetros de entrada da aplicação, via linha de comando.
+
+
+\subsection{Experimentos e Resultados}
+O processo de validação do modelo de Gerenciamento Dinâmico implementado foi realizado na plataforma Grid'5000, utilizando um \textit{cluster} com 8 nodos. Assim como os experimentos realizados utilizando o Algoritmo Baseando em Prioridades, a experimentação do modelo de Gerenciamento Dinâmico foi feita utilizando 7 nodos para o Spark, gerando diferentes cargas de acesso a memória. Entretanto, adicionou-se um 8º nodo ao \textit{clustes} a fim de hospedar o Agente de Monitoramento e o ZooKeeper. A adição deste nodo visa evitar que haja uma sobrecarga nos nodos utilizados pelo Spark, isolando as computações requeridas por estas aplicações em um nodo dedicado.
+
+Assim, os 8 nodos selecionados foram configurados da seguinte maneira: 1 Spark \textit{Master}, 4 Spark \textit{Workers}, 1 nodo executando o \textit{HDFS Namenode} e \textit{HDFS Datanode}, 1 nodo executando o \textit{HDFS Datanode} e 1 nodo hospedando o Agente de Monitoramento e o ZooKeeper \textit{Master}. Cada nodo do sistema era composto por dois  Intel Xeon E5-2630 v3 @2.4GHz (8 \textit{cores}/CPU), 128GB de memória RAM e dois HDs 600GB, conectados via quatro \textit{ethernet} 10Gbps. O sistema operacional utilizado foi o Debian 8, juntamente com Java JDK 1.8.202, Spark 2.2.0 e Hadoop 2.7.1.
+
+Os experimentos foram realizados utilizando os algoritmos \textit{PageRank}, \textit{K-Means} e \textit{Logistic Regression} como \textit{benchmarks}, com o \textit{dateset large} como conjunto de dados de entrada. Tanto os \textit{benchmarks} quanto o \textit{dataset} utilizados na validação do modelo de gerenciamento foram implementados pelo Intel HiBench \cite{huang2010hibench}. Através destes \textit{benchmarks}, visava-se criar 3 possíveis cenários com reutilização de dados:
+
+\begin{enumerate}
+    \item[a)] \textit{PageRank}: acesso intensivo à memória, mas sem substituição de dados do \textit{benchmark};
+    \item[b)] \textit{K-Means}: adição e remoção de RDDs mantidos em \textit{cache} durante a execução do \textit{benchmark}, além da remoção de dados da memória e; 
+    \item[c)] \textit{Logistic Regression}: ocorrência de remoção de dados durante o processamento do \textit{benchmark}, mas sem realizar a remoção de RDDs da \textit{cache} ao longo de toda execução.
+\end{enumerate}
+
+Ainda, para cada \textit{benchmark} foram criados cinco configurações de memória total disponível: 1 GB, 1,5 GB, 2 GB, 2,5 GB e 3 GB. Diferentemente dos experimentos realizados na Seção \ref{sec:alg-pesos}, na validação do modelo de gerenciamento optou-se por remover a configuração de 4 GB disponíveis, uma vez que este não causa sobrecarga à memória, tornando indiferente o algoritmo de gerenciamento de memória utilizado. 
+
+Por fim, foram incluídas as configurações de 2,5 GB e 3 GB de memória disponível. A inclusão destas configurações teve como objetivo criar cenários com intervalos regulares de 0,5 GB a fim de verificar o comportamento da execução dos \textit{benchmarks} utilizados. Na Tabela \ref{tab:memoria-arq-dinamica}, são demonstrados os valores de Memória Total, Memória de Armazenamento e Memória de Armazenamento Total obtidos a partir das cinco configurações utilizadas.
+
+\begin{table}[!ht]
+    \caption{Configuração de Memória Utilizada - Gerenciamento Dinâmico}
+    \label{tab:memoria-arq-dinamica}
+    \centering
+    \scalebox{0.9}{
+    \begin{tabular}{ccc}
+        \hline
+        Memória Total & Memória de Armazenamento & Memória Total de Armazenamento Disponível \\ \hline
+        1 GB & 366,3 MB & 1465,2 MB \\
+        1,5 GB & 639,3 MB & 2557,2 MB \\
+        2 GB & 912,3 MB & 3649,2 MB \\
+        2,5 GB & 1185,6 MB & 4742,4 MB \\
+        3 GB & 1458,6 MB & 5834,4 MB \\ \hline
+    \end{tabular}
+}
+\end{table}
+
+Para a realização dos experimentos, as únicas configurações exigidas pelo ZooKeeper consistem na porta utilizada pelos clientes para realizar a conexão -- sendo 2181 a porta padrão --, um diretório para armazenamento de \textit{snapshots} do estado da memória e um \textit{tick time}, responsável por definir a periodicidade de mensagens \textit{heartbeat} enviadas pelo \textit{framework} a fim de verificar se a conexão dos clientes ainda encontra-se ativa.
+
+O Agente de Monitoramento foi configurado para realizar a verificação do consumo de memória dos \textit{Executors} de forma constante, sendo esta realizada uma vez por segundo. Esta janela de tempo foi escolhida visto que as \textit{tasks} podem ser rapidamente executadas e o espaço disponível na memória ser completamente ocupado.
+
+O \textit{threshold} de ocupação da memória foi adotado em 95\%, visando deixar 5\% da Memória de Armazenamento livre em situações onde é identificada a necessidade de novas computações. A escolha desse \textit{threshold} foi feita de maneira experimental, isto é, após testes preliminares utilizando quatro configurações de \textit{thresholds}: 80\%, 85\%, 90\% e 95\%. A partir destes experimentos preliminares, foi possível perceber que o limiar de ocupação de 95\% apresentou o melhor desempenho.
+
+Na prática, utilizar um \textit{threshold} baixo implica em limitar o espaço disponível para armazenamento de informações. Por exemplo, em uma configuração onde há 2,5 GB de memória total e utiliza-se um \textit{threshold} de 70\%, o espaço disponível para armazenamento de informações é equivalente a 638,61 MB, sendo este valor equivalente a configuração de 2 GB onde há 639,3MB disponíveis.
+
+
+Deste modo, os valores utilizados para as métricas de Frequência de Monitoramento e \textit{threshold} foram escolhidos após a realização de experimentos com configurações distintas. Estes experimentos visavam variar a frequência do monitoramento, isto é, o tempo entre cada verificação do consumo de memória, e o \textit{threshold} utilizados. Assim, os valores dos parâmetros adotados na experimentação final foram aqueles que apresentaram resultados mais promissores dentre as configurações avaliadas. Por fim, os resultados apresentados são obtidos a partir da média aritmética de 20 execuções para cada configuração. 
+
+\subsubsection{Pagerank}
+O \textit{PageRank} é um \textit{benchmark} cujo objetivo é classificar \textit{links} baseando-se em suas ligações, visando determinar uma relevância para cada \textit{link}, onde a precisão dessa classificação depende do número de iterações. Este \textit{benchmark} tinha como objetivo gerar um cenário com acesso intensivo à memória, mas sem substituição de dados do \textit{benchmark}.
+
+No Spark, o processamento deste \textit{benchmark} é realizado em apenas um único \textit{job}. Ou seja, os RDDs responsáveis por calcular a relevância de cada \textit{link} são criados e, ao final, utiliza-se uma ação para submeter a \textit{lineage} ao \textit{DAGScheduler} e iniciar o processamento do \textit{benchmark}.
+
+A \textit{lineage} gerada pelo \textit{benchmark} é composta por 30 RDDs, onde há reutilização do RDD com identificador 6 em outros 4 novos RDDs. Estes RDDs utilizados pelo \textit{benchmark} são processados pelo Spark em 6 estágios de execução. Assim, os resultados obtidos são demonstrados pela Tabela \ref{tab:resultados-pagerank-arq-dinamica} e pela Figura \ref{fig:arq-dinamica-pagerank}, sendo estes resultados a média aritmética de 20 execuções.
+
+
+\begin{table}[!ht]
+    \caption{Tempos de Execuções Obtidos no \textit{Benchmark} \textit{PageRank}}
+    \label{tab:resultados-pagerank-arq-dinamica}
+    \centering
+    \scalebox{1}{
+    \begin{tabular}{ccccc}
+        \hline
+         Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+        LRU & \multirow{2}{*}{1 GB} & 292,28 & 27,41 \\
+        Gerenc. Dinâmico &  & 192,46 & 40,12 \\ \hline
+        LRU & \multirow{2}{*}{1,5 GB} & 77,92 & 5,33 \\
+        Gerenc. Dinâmico &  & 78,68 & 1,99 \\ \hline
+        LRU & \multirow{2}{*}{2 GB} & 47,87 & 0,93 \\
+        Gerenc. Dinâmico &  & 48,81 & 1,01 \\ \hline
+        LRU & \multirow{2}{*}{2,5 GB} & 44,56 & 0,64 \\
+        Gerenc. Dinâmico &  & 45,05 & 0,57 \\ \hline
+        LRU & \multirow{2}{*}{3 GB} & 45,23 & 2,94 \\
+        Gerenc. Dinâmico &  & 44,92 & 0,97 \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+\begin{figure}[!ht]
+    \caption{Tempos de Execução do \textit{benchmark PageRank}}
+    \begin{center}
+        \includegraphics[scale=0.95]{imagens/Gerenc-PageRank.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:arq-dinamica-pagerank}
+\end{figure}
+
+A diferença mais notável foi detectada na configuração com 1 GB de memória disponível. Nesta configuração, o Gerenciamento Dinâmico foi, em média, 34,15\% mais rápido que o algoritmo LRU nas mesmas condições. Analisando os \textit{logs} de execução produzidos durante a execução deste \textit{benchmark}, é possível perceber que não houve remoção de partições de RDDs da memória em ambos os casos, tanto com a utilização do algoritmo LRU quanto o Gerenciamento Dinâmico. Isto se dá mesmo em casos de restrição de memória total, como é possível perceber no uso de 1 GB. 
+
+Na execução deste \textit{benchmark}, apenas variáveis de \textit{broadcasts}, as quais são utilizadas para sincronizar a execução entre os nodos do \textit{cluster}, são removidas da memória. Neste processo, é possível perceber que o LRU introduz de forma mais frequente um \textit{overhead} na remoção, pela JVM, dos objetos não mais utilizados, sendo este fato demonstrado pelo exceção \textit{GC Overhead Limit Exceeded error}. 
+
+A sobrecarga na remoção de objetos pela JVM é causada pela forma  de implementação do LRU no Spark. O Spark utiliza-se de uma lista dinâmica, inicialmente com 32 posições, sendo novas posições alocadas quando a lista atinge 75\% de ocupação. Assim, a remoção de blocos na memória de execução e na memória de dados sobrecarrega o \textit{Garbage Collector}. 
+
+Diferentemente do LRU, a implementação do modelo de Gerenciamento Dinâmico utiliza uma estrutura onde não há alocação de memória realizada de maneira prévia. Desde modo, aloca-se espaço na memória apenas quando há 
+necessidade de armazenar novos dados. Como consequência, o Gerenciamento Dinâmico consegue atingir uma mais estabilidade na execução deste \textit{benchmark} em situações onde há uma alta sobrecarga no acesso a memória e o espaço disponível total é reduzido, acarretando em uma diminuição do tempo médio de execução.
+
+\subsubsection{K-Means}
+O \textit{benchmark K-Means} é uma aplicação de aprendizagem de máquina de forma não supervisionada, cujo objetivo é agrupar o conjunto de dados utilizados como entrada em \textit{K} grupos distintos. Este agrupamento é realizado utilizando as características encontradas no conjunto de dados. Uma particularidade deste \textit{benchmark} é a manipulação dos RRDs mantidos em \textit{cache}, onde diferentes RDDs são reutilizados na criação de novos RDDs.
+
+No \textit{benchmark} \textit{K-Means} é esperado que RDDs sejam adicionados e removidos da \textit{cache}. A \textit{lineage} formada pela implementação desse \textit{benchmark} é composta por 31 RDDs, dos quais 4 são mantidos em \textit{cache}, sendo estes os RDDs 2, 3, 9 e 13. Os RDDs 9 e 13 são adicionados e posteriormente removidos da \textit{cache} no decorrer da execução da aplicação. Os RDDs 2 e 3 apresentam as maiores frequências de reutilização, sendo mantidos em \textit{cache} durante toda a execução do \textit{benchmark}.
+
+Os resultados, obtidos a partir da média aritmética de 20 execuções, deste \textit{benchmark} são demonstrados na Tabela \ref{tab:resultados-kmeans-arq-dinamica} e na Figura \ref{fig:arq-dinamica-kmeans}. 
+
+\begin{table}[!ht]
+    \caption{Tempos de Execuções Obtidos no \textit{Benchmark} \textit{K-Means}}
+    \label{tab:resultados-kmeans-arq-dinamica}
+    \centering
+    \scalebox{1}{
+    \begin{tabular}{ccccc}
+        \hline
+        Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+        LRU & \multirow{2}{*}{1 GB} & 155,79 & 6,60 \\
+        Gerenc. Dinâmico &  & 148,84 & 6,75 \\ \hline
+        LRU & \multirow{2}{*}{1,5 GB} & 167,36 & 3,08 \\
+        Gerenc. Dinâmico &  & 166,07 & 4,25 \\ \hline
+        LRU & \multirow{2}{*}{2 GB} & 116,47 & 4,95 \\
+        Gerenc. Dinâmico &  & 108,28 & 2,41 \\ \hline
+        LRU & \multirow{2}{*}{2,5 GB} & 43,93 & 3,31 \\
+        Gerenc. Dinâmico &  & 44,19 & 1,89 \\ \hline
+        LRU & \multirow{2}{*}{3 GB} & 46,26 & 3,55 \\
+        Gerenc. Dinâmico &  & 46,72 & 4,21 \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+\begin{figure}[!ht]
+    \caption{Tempos de Execução do \textit{benchmark K-Means}.}
+    \begin{center}
+        \includegraphics[scale=1.0]{imagens/Gerenc-K-Means.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:arq-dinamica-kmeans}
+\end{figure}
+
+Analisando os resultados obtidos neste \textit{benchmark}, as diferenças mais perceptíveis foram detectadas nas configurações de 1 GB e 2 GB de memória total disponível. Com 1 GB, o modelo de Gerenciamento Dinâmico foi aproximadamente 4,46\% mais rápido, quando comparado ao LRU. Já na configuração de 2 GB de memória, o modelo de gerenciamento foi 7,89\% mais rápido que o LRU nas mesmas condições, quando consideramos a média dos tempos de execução destes \textit{benchmarks}. 
+
+Nas configurações de 1,5 GB, 2,5 GB e 3 GB de memória disponível, o desempenho de ambos algoritmos foi equivalente. Analisando os \textit{logs} de execução gerados pelo \textit{K-Means}, observou-se que a execução deste \textit{benchmark} se deu em 14 \textit{jobs}, sendo 7 \textit{jobs} compostos por um estágio e os demais compostos por 2 ou 3 estágios. Em casos onde o \textit{job} é composto por apenas um  estágio, não há possibilidade de prever a existência de computações futuras. Esta restrição ocorre uma vez que o Spark executa as aplicações gerando o plano de execução do \textit{jobs} apenas quando ações são aplicadas ao RDD.
+
+Assim, nos \textit{jobs} com um estágio é inviável analisar a aplicação de forma integral a fim de verificar se outros \textit{jobs} serão necessários para completar execução. Consequentemente, o Agente de Monitoramento opta por não remover dados da memória, mesmo em situações onde o \textit{threshold} foi ultrapassado.
+
+Uma diferença evidente entre o algoritmo LRU e o modelo de Gerenciamento Dinâmico é a forma como os blocos de dados são operados. Na Tabela \ref{tab:resultados-substitucoes-kmeans} é exibido o número de inserções e remoções realizadas na memória em cada configuração testada. A partir desta tabela, busca-se investigar e apresentar o comportamento das operações ocorridas em memória, quando utilizado o LRU e o algoritmo de Gerenciamento Dinâmico.
+
+A tabela descreve o número de partições de RDDs adicionadas e removidas da memória e a quantidade de variáveis de \textit{broadcast} adicionadas e removidas. As partições são blocos que contém os dados em \textit{cache} da aplicação, enquanto as variáveis de \textit{broadcast} são utilizadas pelo Spark para distribuir as \textit{tasks} entre os \textit{Executors}. Os valores apresentados são a média aritmética das 20 execuções realizadas em cada configuração de memória.
+
+\begin{table}[!ht]
+\caption{Número de Remoções e Inserções de Dados na Memória do \textit{benchmark} K-Means}
+    \label{tab:resultados-substitucoes-kmeans}
+    \centering
+    \begin{tabular}{cccccc}
+    \hline
+        Algoritmo & Memória & \begin{tabular}[c]{@{}c@{}}Partições \\ de RDDs \\ Adicionadas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Partições \\ de RDDs\\  Removidas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Variáveis \\ de Broadcast \\ Adicionadas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Variáveis \\ de Broadcast \\ Removidas\end{tabular} \\ \hline
+        LRU & \multirow{2}{*}{1 GB} & 185 & 108 & 147 & 119 \\
+        Gerenc. Dinâmico &  & 188 & 109 & 147 & 115 \\ \hline
+        LRU & \multirow{2}{*}{1,5 GB} & 356 & 265 & 146 & 63 \\
+        Gerenc. Dinâmico &  & 362 & 270 & 146 & 115 \\ \hline
+        LRU & \multirow{2}{*}{2 GB} & 247 & 150 & 146 & 65 \\
+        Gerenc. Dinâmico &  & 210 & 116 & 146 & 111 \\ \hline
+        LRU & \multirow{2}{*}{2,5 GB} & 132 & 12 & 146 & 63 \\
+        Gerenc. Dinâmico &  & 134 & 14 & 146 & 60 \\ \hline
+        LRU & \multirow{2}{*}{3 GB} & 133 & 14 & 146 & 57 \\
+        Gerenc. Dinâmico &  & 145 & 25 & 146 & 60 \\ \hline
+    \end{tabular}
+\end{table}
+
+De acordo com a Tabela \ref{tab:resultados-substitucoes-kmeans}, com 1 GB de memória, tanto o LRU quanto o Gerenciamento Dinâmico removeram e inseriram uma quantidade semelhante de partições de RDDs e variáveis de \textit{broadcast} durante a execução do \textit{benchmark}. Esta semelhança na quantidade de remoções e inserções de dados na memória demonstra que, nessas condições, a memória encontrava-se fortemente sobrecarregada. Nas configurações de 1,5 GB, a diferença principal foi na quantidade de variáveis de \textit{broadcast} removidas pelo modelo de gerenciamento. Nesta configuração, o Gerenciamento Dinâmico removeu mais variáveis de \textit{broadcast}, e consequentemente manteve mais partições de RDDs em memória. 
+
+Na configuração de 2 GB de memória é observada a maior diferença entre os métodos de gerenciamento de memória. Nesta configuração, o Gerenciamento Dinâmico removeu uma quantidade menor de partições de RDDs da memória, havendo também uma redução no número de inserções de partições. Estas reduções ocorrem porque o algoritmo utilizado para gerenciar a memória no modelo de Gerenciamento Dinâmico consegue priorizar partições de RDDs em detrimento das variáveis de \textit{broadcast}. Assim, enquanto o LRU remove uma partição de RDD para inserir outra partição de RDD, o algoritmo utilizado o Gerenciamento Dinâmico remove primeiro as variáveis de \textit{broadcast}, para então remover dados.
+
+Quando utilizadas as configurações de 2,5 GB e 3G GB de memória, o comportamento de ambos algoritmos foi similar, ou seja, tanto o tempo de execução quanto o número de operações de adição e remoção de blocos da memória foram semelhantes. Esta semelhança se dá devido ao o espaço disponibilizado se mostrou próximo do suficiente para comportar todo o \textit{dataset}, exigindo poucas operações de adição e remoção de dados da memória.
+
+Portanto, ao sumarizar as informações das Tabelas  \ref{tab:resultados-kmeans-arq-dinamica} e  \ref{tab:resultados-substitucoes-kmeans}, o algoritmo utilizado no Gerenciamento Dinâmico tende a priorizar a manutenção de partições de RDDs em detrimento das variáveis de \textit{broadcast}. Deste modo, esta característica na ordem de remoção dos dados difere entre o LRU e o algoritmo utilizado no Gerenciamento Dinâmico. Assim, em situações onde há restrição no espaço de memória disponível, como o ocorrido nos casos com 1,5 GB e 2 GB de memória total, onde o Gerenciamento Dinâmico removeu uma maior quantidade de variáveis de \textit{broadcast}. Além disto, o Gerenciamento dinâmico conseguiu reduzir o tempo de execução necessário nas configurações de 1 GB, 1,5 GB e 2 GB.
+
+
+\subsubsection{Logistic Regression}
+O \textit{benchmark Logistic Regression} consiste em um tipo de análise estatística utilizada frequentemente para análise preditiva. Diferente dos \textit{benchmarks} anteriores, a principal característica do \textit{Logistic Regression} está na permanência de RDDs em memória. Assim, dois RDDs são computados e mantidos em \textit{cache} durante toda a execução deste \textit{benchmark}. Dessa forma, não há remoção de RDDs da \textit{cache} como ocorrido no \textit{K-Means}.
+
+Durante a computação desse \textit{benchmark}, ao total são manipulados 157 RDDs, sendo os RDDs 2 e 11 mantidos em \textit{cache} pernamentemente durante a execução do \textit{benchmark}. Estes RDDs manipulados são processados em 42 \textit{jobs}, dentre os quais apenas 2 são compostos por um único estágio. Assim, torna-se possível identificar se novas computações serão requeridas pelo \textit{job} e, se necessário, realizar a remoção antecipada de blocos da memória.
+
+Além disso, o \textit{benchmark Logistic Regression} possui o maior \textit{dataset} dentre os \textit{benchmarks} utilizados, com um total de 7,5 GB de dados. Assim, devido ao grande número de RDDs processados e ao conjunto de dados utilizado, este \textit{benchmark} utiliza a memória de maneira mais intensiva.
+
+Os resultados obtidos, sendo estes a média aritmética de 20 execução em cada configuração, são demonstrados na Tabela \ref{tab:resultados-lr-arq-dinamica} e na Figura \ref{fig:arq-dinamica-lr}. A Tabela \ref{tab:resultados-substitucoes-lr} demonstra a quantidade média de operações de adição e remoção de blocos da memória durante a execução.
+
+\begin{table}[!ht]
+    \caption{Tempos de Execuções Obtidos no \textit{Benchmark} \textit{Logistic Regression}}
+    \label{tab:resultados-lr-arq-dinamica}
+    \centering
+    \scalebox{1}{
+    \begin{tabular}{ccccc}
+        \hline
+        Algoritmo & \begin{tabular}[c]{@{}c@{}}Memória \\ Disponível\end{tabular} & \begin{tabular}[c]{@{}c@{}}Tempo de \\ Execução (em s)\end{tabular} & \begin{tabular}[c]{@{}c@{}}Desvio \\ Padrão (em s)\end{tabular} \\ \hline
+        LRU & \multirow{2}{*}{1 GB} & 0 & 0 \\
+        Gerenc. Dinâmico &  & 0 & 0 \\ \hline
+        LRU & \multirow{2}{*}{1,5 GB} & 469,67* & 0,0* \\
+        Gerenc. Dinâmico &  & 357,22 & 12,69 \\ \hline
+        LRU & \multirow{2}{*}{2 GB} & 305,94 & 4,80 \\
+        Gerenc. Dinâmico &  & 289,76 & 2,30 \\ \hline
+        LRU & \multirow{2}{*}{2,5 GB} & 255,91 & 7,34 \\
+        Gerenc. Dinâmico &  & 245,84 & 2,44 \\ \hline
+        LRU & \multirow{2}{*}{3 GB} & 140,60 & 10,70 \\
+        Gerenc. Dinâmico &  & 150,11 & 15,85 \\ \hline
+    \end{tabular}
+    }
+\end{table}
+
+\begin{figure}[!ht]
+    \caption{Tempos de Execução do \textit{benchmark Logistic Regression}.}
+    \begin{center}
+        \includegraphics[scale=1.0]{imagens/Gerenc-Logistic-Regression.pdf}
+    \end{center}
+    \small{Fonte: Próprio autor}
+    \label{fig:arq-dinamica-lr}
+\end{figure}
+
+Analisando a Tabela \ref{tab:resultados-lr-arq-dinamica}, na configuração com 1 GB de memória total disponível, tanto o algoritmo LRU quanto o modelo de Gerenciamento Dinâmico não conseguiram terminar a execução da aplicação. Nestes casos, uma exceção de \textit{OutOfMemoryError} é lançada pela JVM, indicando uma alta sobrecarga no tempo de execução do \textit{Garbage Collector} (GC) e interrompendo a execução do \textit{benchmark}, sendo este comportamento observado durante as 20 execuções do \textit{benchmark}, em ambos os algoritmos. É importante ressaltar que todas as execuções foram realizadas utilizando o algoritmo padrão de GC provido pela Oracle Java JDK 1.8.
+
+Observando os resultados atingidos, nota-se uma singularidade com relação a configuração com capacidade de 1,5 GB de memória total disponível.Nesta configuração, o algoritmo LRU não conseguiu completar nenhuma execução deste \textit{benchmark}. O tempo demonstrado pela Tabela \ref{tab:resultados-lr-arq-dinamica} para a configuração de 1,5 GB do LRU é aquele capturado pelo HiBench para execução de 29 dos 42 \textit{jobs} da aplicação. Assim, o modelo de Gerenciamento Dinâmico foi, em média, 23,94\% mais rápido que o tempo registrado para o LRU, mesmo que este algoritmo não tenha terminado o processamento da aplicação por completo. 
+
+Além disso, houve uma grande discrepância na estabilidade do Spark durante a execução do \textit{benchmark} nesta configuração de 1,5 GB, onde o algoritmo LRU conseguiu executar apenas 1 vez dentre todas as tentativas realizadas, impossibilitando o cálculo do desvio padrão do tempo médio de execução. Assim como o ocorrido na configuração com 1 GB disponível, as 19 execuções restantes foram interrompidas pela JVM indicando sobrecarga nas rotinas do \textit{Garbage Collector}.
+
+Quando dispostos 2 GB de memória total disponível, o Gerenciamento Dinâmico foi 11,82\% mais rápido, quando comparado ao LRU nesta mesma configuração e considerado a média das execuções. Em situações com 2,5 GB, ambos os métodos de gerenciamento de memória apresentaram desempenho similar, havendo uma redução de apenas 3,93\% no tempo de execução do LRU. Na última configuração avaliada, com 3 GB de memória disponível, o modelo de gerenciamento implementado foi 6,37\% mais lento que o LRU, acarretando em uma degradação no desempenho. Esta degradação ocorreu devido ao \textit{threshold} adotado, induzindo o aumento na remoção de blocos da memória a fim de evitar o preenchimento completo da memória.
+
+A Tabela \ref{tab:resultados-substitucoes-lr} tem como objetivo demonstrar o número de inserções e remoções de dados na memória, durante a execução do \textit{benchmark}. Na configuração de 1 GB de memória disponível, nenhuma informação relativa às operações na memória foi capturada, visto que ambos algoritmos não conseguiram finalizar a execução do \textit{benchmark}.
+
+Quando utilizada a configuração com 1,5 GB de memória disponível, não foi possível obter os dados relativos ao comportamento da memória do algoritmo LRU, uma vez que este algoritmo não conseguiu completar a execução do \textit{benchmark}. Nas configurações de 2 GB e 2,5 GB, é possível perceber que o modelo de Gerenciamento Dinâmico realizou menos operações de adição e remoção de partições de RDDs na memória, se comparado ao LRU. 
+
+\begin{table}[!ht]
+\caption{Número de Remoções e Inserções de Dados na Memória do \textit{benchmar Logistic Regression}}
+    \label{tab:resultados-substitucoes-lr}
+    \centering
+    \begin{tabular}{cccccc}
+    \hline
+        Algoritmo & Memória & \begin{tabular}[c]{@{}c@{}}Partições \\ de RDDs \\ Adicionadas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Partições \\ de RDDs\\  Removidas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Variáveis \\ de Broadcast \\ Adicionadas\end{tabular} & \begin{tabular}[c]{@{}c@{}}Variáveis \\ de Broadcast \\ Removidas\end{tabular} \\ \hline
+        LRU & \multirow{2}{*}{1 GB} & - & - & - & - \\
+        Gerenc. Dinâmico &  & - & - & - & - \\ \hline
+        LRU & \multirow{2}{*}{1,5 GB} & - & - & - & - \\
+        Gerenc. Dinâmico &  & 2119 & 2080 & 685 & 628 \\ \hline
+        LRU & \multirow{2}{*}{2 GB} & 2317 & 2270 & 762 & 728 \\
+        Gerenc. Dinâmico &  & 1929 & 1882 & 762 & 710 \\ \hline
+        LRU & \multirow{2}{*}{2,5 GB} & 1096 & 1032 & 762 & 734 \\
+        Gerenc. Dinâmico &  & 922 & 860 & 762 & 730 \\ \hline
+        LRU & \multirow{2}{*}{3 GB} & 178 & 101 & 762 & 734 \\
+        Gerenc. Dinâmico &  & 246 & 169 & 762 & 731 \\ \hline
+    \end{tabular}
+\end{table}
+
+A redução na quantidade de operações realizada na memória demonstra que o algoritmo utilizado pelo modelo de Gerenciamento Dinâmico consegue priorizar os dados de RDDs na memória, mantendo-os por mais tempo em memória quando comparado ao LRU. Essa característica é demonstrada pelo ordem em que os blocos são removidos da memória, onde o algoritmo utilizado no Gerenciamento Dinâmico opta por remover variáveis de \textit{broadcast} antes de iniciar a remoção de dados de RDDs.
+
+No LRU, ao receber uma variável de \textit{broadcast}, o algoritmo armazena esta variável ao final da lista de blocos mantidos na memória. Deste modo, garante-se que deve ser removida por último, uma vez que esta variável teve o acesso mais recente. Se uma nova partição de um RDD precisa ser armazenada, o LRU irá remover uma partição de dados a fim de liberar espaço para a nova partição que deve ser armazenada.
+
+No algoritmo utilizado no Gerenciamento Dinâmico, ao receber um variável de \textit{boradcast}, o algoritmo armazena esta variável no início da lista de blocos mantido em memória. Isto ocorre porque estas variáveis não possuem frequência de reutilização dentro do \textit{job} gerado pelo \textit{DAGScheduler}, tendo o valor 1 como padrão. Assim, em situações onde uma nova partição de um RDD precisa ser armazenada, o modelo dinâmico irá remover primeiro as variáveis de \textit{broadcast} e depois remove as partições de dados. Consequentemente, mais partições de RDDs podem ser mantidas em memória.
+
+Na configuração com 3 GB, o modelo de gerenciamento removeu mais blocos de RDDs que o LRU devido ao \textit{threshold} adotado pelo modelo. Deste modo, a necessidade de manter uma fração da memória sempre livre, imposta pelo Agente de Monitoramento acarretou em remover mais partições que o necessário. Como consequência, o Spark teve que recomputar as partições perdidas, acarretando em uma degradação de 6,37\% no desempenho do \textit{framework}.
+
+% patricia: [final] não entendi aqui... a ordem é diferente e o GD mantém mais partições - o que a ordem tem a ver com a quantidade de partições
+% mauricio: quando a memória não ta extremamente sobrecarregada (como k-means) o G.D tende a remover menos partições de dados. Aqui no LR, como tem muitooo dado, tanto o G.D quanto o LRU removem a mesma quantidade de broadcast, mas a diferença foi a ordem. No LRU ele começa removendo 5 partições de dados enquanto que no GB ele remove 2 de dados e 3 de broadcast.
+Assim, ao sumarizar a análise dos dados dispostos nas Tabelas \ref{tab:resultados-lr-arq-dinamica} e \ref{tab:resultados-substitucoes-lr}, é possível perceber que ambos algoritmos fizeram uso intensivo da memória disponível, demonstrado pela grande quantidade de operações de adição e remoção de dados da memória. Entretanto, a ordem em que esses blocos são removidos é diferente, onde o algoritmo utilizado no Gerenciamento Dinâmico consegue manter uma maior quantidade de partições em memória. Como consequência, observa-se uma redução no tempo necessário para processar o \textit{benchmark} visto que o número de recomputações é reduzido, em especial em situações onde a memória encontra-se bem restringida, como é o caso onde utilizou-se 1,5 GB, 2 Gb e 2,5 Gb como configuração de memória.
+
+Por fim, em situações onde a memória é suficiente para comportar o \textit{dataset}, a remoção antecipada de blocos da memória pode acarretar em uma degradação no desempenho. Esta degradação pode ser observada na configuração de 3 GB, onde o Gerenciamento Dinâmico removeu e inseriu mais partições de RDDs, aumentando o número de recomputações necessárias.
